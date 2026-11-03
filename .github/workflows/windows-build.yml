@@ -62,7 +62,8 @@ jobs:
               summary = 'Update — ' + $title
             }
           })
-          $history | ConvertTo-Json -Depth 3 | Set-Content src/Afterline/CanaryBuildHistory.json -Encoding utf8
+          # -InputObject keeps a one-build history as a JSON array.
+          ConvertTo-Json -InputObject @($history) -Depth 3 | Set-Content src/Afterline/CanaryBuildHistory.json -Encoding utf8
 
       - name: Publish identified Canary Windows x64 build
         shell: pwsh
