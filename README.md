@@ -68,7 +68,7 @@ Afterline is designed as a passive, read-only companion utility. It reads chat t
 
 ### Servers with a custom chat UI
 
-If Live Chat stays empty while you're connected, the server probably uses its own chat layout. Afterline checks the game's NUI frames for a known layout every few seconds. If none matches, set **Settings → Capture & processing → Custom chat selector** to the chat container and one line, written as `container > line` (for example `.chat-list > .line`). You can find them by opening `http://localhost:13172` in a browser while the game is running and inspecting the chat. The diagnostic log records which layout and frame are in use.
+If Live Chat stays empty while you're connected, the server probably uses its own chat layout. Afterline checks the game's NUI frames for a known layout every few seconds. If none matches, set **Settings → Capture & processing → Custom chat selector** to a CSS selector for each chat line (for example `.chat-list .line`), or to the container and its lines written as `container > line` (for example `.chat-list > .line`). You can find them by opening `http://localhost:13172` in a browser while the game is running and inspecting the chat. The diagnostic log records which layout and frame are in use.
 
 Users are responsible for checking and following the rules of each server or community before using external chat-logging or archival tools.
 

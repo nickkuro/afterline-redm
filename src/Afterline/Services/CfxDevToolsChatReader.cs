@@ -51,6 +51,8 @@ public sealed class CfxDevToolsChatReader : IAsyncDisposable
     private const string ChatLayoutHelpers =
         "function afterlineChatRows(container,layout){try{return Array.from(container.querySelectorAll(layout.Rows));}catch(_){return [];}}" +
         "function afterlineIsDirectRows(layout){return !!layout&&layout.Rows.lastIndexOf(':scope >',0)===0;}" +
+        "function afterlineChildSelector(layout){return layout.Rows.replace(/^:scope\\s*>\\s*/,'');}" +
+        "function afterlineMatches(node,selector){try{return node.matches(selector);}catch(_){return false;}}" +
         "function afterlineFindChat(layouts){var fallback=null;for(var i=0;i<layouts.length;i++){var container=null;try{container=document.querySelector(layouts[i].Container);}catch(_){continue;}if(!container)continue;var rows=afterlineChatRows(container,layouts[i]);if(rows.length)return {container:container,layout:layouts[i],index:i,rows:rows};if(!fallback)fallback={container:container,layout:layouts[i],index:i,rows:[]};}return fallback||{container:null,layout:null,index:-1,rows:[]};}";
 
     private const string ReadChatExpressionTemplate = """
@@ -215,8 +217,8 @@ public sealed class CfxDevToolsChatReader : IAsyncDisposable
         "var binding=window['" + ChatChangedBinding + "'];" +
         "if(typeof binding!=='function') return false;" +
         "var previous=window.__afterlineChatObserver;" +
-        "if(previous){try{previous.chatObserver&&previous.chatObserver.disconnect();}catch(_){}try{previous.rootObserver&&previous.rootObserver.disconnect();}catch(_){}try{previous.messageHandler&&window.removeEventListener('message',previous.messageHandler,true);}catch(_){}}" +
-        "var state={chat:null,chatObserver:null,rootObserver:null,messageHandler:null,frame:0,knownRows:null,pendingRows:[],isBaseline:false,unavailableReported:false,layout:null,layoutIndex:-1,hasRows:false};" +
+        "if(previous){previous.disposed=true;try{previous.chatObserver&&previous.chatObserver.disconnect();}catch(_){}try{previous.rootObserver&&previous.rootObserver.disconnect();}catch(_){}try{previous.messageHandler&&window.removeEventListener('message',previous.messageHandler,true);}catch(_){}}" +
+        "var state={chat:null,chatObserver:null,rootObserver:null,messageHandler:null,frame:0,knownRows:null,pendingRows:[],isBaseline:false,unavailableReported:false,layout:null,layoutIndex:-1,hasRows:false,attachFrame:0,disposed:false};" +
         // Chat timestamps are only useful at the point a row arrives. Do not
         // debounce a busy scene: one animation frame lets FiveM finish the DOM
         // write while preserving the earliest practical observation time.
@@ -225,14 +227,27 @@ public sealed class CfxDevToolsChatReader : IAsyncDisposable
         // emit it as an event instead of silently absorbing it into a viewport
         // baseline. A player can scroll that viewport, but the mutation itself
         // is authoritative that this row just appeared.
-        "function emit(){state.frame=0;try{var baseline=state.isBaseline&&state.pendingRows.length===0;var lines=baseline?" + ReadChatExpressionTemplate + ":[];var added=[];if(!baseline){state.pendingRows.forEach(function(row){var line=readAddedRow(row);if(line)added.push(line);});}state.pendingRows=[];state.isBaseline=false;binding(JSON.stringify({ObservedAtUnixMilliseconds:Date.now(),LinesJson:lines,AddedLinesJson:JSON.stringify(added),IsBaseline:baseline}));}catch(_){}}" +
+        "function emit(){state.frame=0;if(state.disposed)return;try{var baseline=state.isBaseline&&state.pendingRows.length===0;var lines=baseline?" + ReadChatExpressionTemplate + ":[];var added=[];if(!baseline){state.pendingRows.forEach(function(row){var line=readAddedRow(row);if(line)added.push(line);});}state.pendingRows=[];state.isBaseline=false;binding(JSON.stringify({ObservedAtUnixMilliseconds:Date.now(),LinesJson:lines,AddedLinesJson:JSON.stringify(added),IsBaseline:baseline}));}catch(_){}}" +
         "function schedule(){if(!state.frame)state.frame=requestAnimationFrame(emit);}" +
-        // Watch the first layout whose container holds chat lines. Direct-child
-        // layouts only observe the container's children, as before; descendant
-        // layouts observe its subtree. New lines are any matching rows not yet
-        // known, in DOM order.
-        "function attach(){var current=state.chat;if(current&&current.isConnected&&state.hasRows)return;var found=afterlineFindChat(" + LayoutsPlaceholder + ");var chat=found.container;if(chat===state.chat&&found.index===state.layoutIndex){if(chat&&found.rows.length)state.hasRows=true;return;}if(state.chatObserver)state.chatObserver.disconnect();state.chat=chat;state.layout=found.layout;state.layoutIndex=found.index;state.hasRows=found.rows.length>0;state.chatObserver=null;state.pendingRows=[];state.knownRows=new WeakSet();if(!chat){if(!state.unavailableReported){state.unavailableReported=true;binding(JSON.stringify({ObservedAtUnixMilliseconds:Date.now(),LinesJson:'[]',IsChatSurfaceUnavailable:true}));}return;}state.unavailableReported=false;found.rows.forEach(function(node){state.knownRows.add(node);});state.isBaseline=true;state.chatObserver=new MutationObserver(function(records){if(!records.some(function(record){return record.type==='childList';}))return;afterlineChatRows(state.chat,state.layout).forEach(function(node){if(state.knownRows.has(node))return;state.knownRows.add(node);state.hasRows=true;if(state.pendingRows.indexOf(node)<0)state.pendingRows.push(node);});if(state.pendingRows.length)schedule();});state.chatObserver.observe(chat,{childList:true,subtree:!afterlineIsDirectRows(state.layout)});schedule();}" +
-        "state.rootObserver=new MutationObserver(attach);state.rootObserver.observe(document.documentElement,{childList:true,subtree:true});" +
+        // Watch the first layout whose container holds chat lines.
+        // Direct-child layouts (the FiveM default) behave exactly as before:
+        // only new matching children of the container count. Descendant
+        // layouts observe the subtree; only rows after the last row already
+        // seen count as new, so a UI that re-renders earlier rows doesn't
+        // resend them, and a full re-render becomes a fresh baseline.
+        "function rowAdded(node){if(state.knownRows.has(node))return;state.knownRows.add(node);state.hasRows=true;if(state.pendingRows.indexOf(node)<0)state.pendingRows.push(node);}" +
+        "function onChatMutation(records){if(state.disposed)return;" +
+        "if(afterlineIsDirectRows(state.layout)){var child=afterlineChildSelector(state.layout);records.forEach(function(record){if(record.type!=='childList'||record.target!==state.chat)return;Array.from(record.addedNodes).forEach(function(node){if(!node||node.nodeType!==1||!afterlineMatches(node,child))return;rowAdded(node);});});}" +
+        "else{if(!records.some(function(record){return record.type==='childList'&&Array.prototype.some.call(record.addedNodes,function(node){return node&&node.nodeType===1;});}))return;" +
+        "var current=afterlineChatRows(state.chat,state.layout);var lastKnown=-1;for(var i=current.length-1;i>=0;i--){if(state.knownRows.has(current[i])){lastKnown=i;break;}}" +
+        "if(lastKnown<0&&state.hasRows&&current.length>1){current.forEach(function(node){state.knownRows.add(node);});state.pendingRows=[];state.isBaseline=true;schedule();return;}" +
+        "current.forEach(function(node,index){if(state.knownRows.has(node))return;if(index<lastKnown){state.knownRows.add(node);return;}rowAdded(node);});}" +
+        "if(state.pendingRows.length)schedule();}" +
+        "function attach(){if(state.disposed)return;var current=state.chat;if(current&&current.isConnected&&state.hasRows)return;var found=afterlineFindChat(" + LayoutsPlaceholder + ");var chat=found.container;if(chat===state.chat&&found.index===state.layoutIndex){if(chat&&found.rows.length)state.hasRows=true;return;}if(state.chatObserver)state.chatObserver.disconnect();state.chat=chat;state.layout=found.layout;state.layoutIndex=found.index;state.hasRows=found.rows.length>0;state.chatObserver=null;state.pendingRows=[];state.knownRows=new WeakSet();if(!chat){if(!state.unavailableReported){state.unavailableReported=true;binding(JSON.stringify({ObservedAtUnixMilliseconds:Date.now(),LinesJson:'[]',IsChatSurfaceUnavailable:true}));}return;}state.unavailableReported=false;found.rows.forEach(function(node){state.knownRows.add(node);});state.isBaseline=true;state.chatObserver=new MutationObserver(onChatMutation);state.chatObserver.observe(chat,{childList:true,subtree:!afterlineIsDirectRows(state.layout)});schedule();}" +
+        // Page-wide DOM changes only matter while no chat with lines is
+        // attached; re-check at most once per animation frame.
+        "function queueAttach(){if(state.disposed||(state.chat&&state.chat.isConnected&&state.hasRows))return;if(!state.attachFrame)state.attachFrame=requestAnimationFrame(function(){state.attachFrame=0;attach();});}" +
+        "state.rootObserver=new MutationObserver(queueAttach);state.rootObserver.observe(document.documentElement,{childList:true,subtree:true});" +
         "window.__afterlineChatObserver=state;attach();return true;" +
         "})()";
 
@@ -326,12 +341,9 @@ public sealed class CfxDevToolsChatReader : IAsyncDisposable
     private bool _eventCaptureAvailable;
     private string[] _lastExactVisibleText = Array.Empty<string>();
     private long _readerGeneration;
-    private IReadOnlyList<ChatLayout> _layouts = KnownLayouts;
-    private string? _layoutKey;
-    private string _readExpression = string.Empty;
-    private string _legacyExpression = string.Empty;
-    private string _observerExpression = string.Empty;
-    private string _probeExpression = string.Empty;
+    // Layouts and the scripts built from them, swapped as one object so
+    // concurrent callers never mix scripts from different settings.
+    private volatile ChatScripts? _scripts;
     private volatile bool _reconnectRequested;
     private string? _frameId;
     private string? _loggedLayoutSignature;
@@ -358,7 +370,7 @@ public sealed class CfxDevToolsChatReader : IAsyncDisposable
         try
         {
             string? json = await EvaluateChatExpressionAsync(
-                _readExpression,
+                Scripts.Read,
                 cancellationToken);
             if (!string.IsNullOrWhiteSpace(json))
             {
@@ -386,7 +398,7 @@ public sealed class CfxDevToolsChatReader : IAsyncDisposable
         }
 
         string? legacyJson = await EvaluateChatExpressionAsync(
-            _legacyExpression,
+            Scripts.Legacy,
             cancellationToken);
         string[] legacyLines = string.IsNullOrWhiteSpace(legacyJson)
             ? Array.Empty<string>()
@@ -461,7 +473,7 @@ public sealed class CfxDevToolsChatReader : IAsyncDisposable
             {
                 await Task.Delay(TimeSpan.FromMilliseconds(25), cancellationToken);
                 string? retryJson = await EvaluateChatExpressionAsync(
-                    _readExpression,
+                    Scripts.Read,
                     cancellationToken);
                 if (string.IsNullOrWhiteSpace(retryJson)) break;
 
@@ -548,7 +560,8 @@ public sealed class CfxDevToolsChatReader : IAsyncDisposable
 
     // "container > line" splits at the last top-level child combinator; the
     // line part matches direct children of the container. Without a ">", the
-    // whole value is the container and each of its children is a line.
+    // value is a selector for the lines themselves, matched anywhere on the
+    // page.
     internal static ChatLayout? ParseCustomLayout(string? value)
     {
         string? text = NullIfBlank(value);
@@ -563,7 +576,7 @@ public sealed class CfxDevToolsChatReader : IAsyncDisposable
                 return new ChatLayout(container, ":scope > " + rows);
         }
 
-        return new ChatLayout(text, ":scope > *");
+        return new ChatLayout(":root", text);
     }
 
     private static int FindLastTopLevelChildCombinator(string selector)
@@ -609,26 +622,42 @@ public sealed class CfxDevToolsChatReader : IAsyncDisposable
         catch { custom = null; }
 
         string key = custom ?? string.Empty;
-        if (string.Equals(key, _layoutKey, StringComparison.Ordinal)) return false;
+        ChatScripts? current = _scripts;
+        if (current is not null && string.Equals(key, current.Key, StringComparison.Ordinal)) return false;
 
-        bool hadLayouts = _layoutKey is not null;
-        _layoutKey = key;
-        _layouts = BuildLayouts(custom);
-        _readExpression = BuildReadExpression(_layouts);
-        _legacyExpression = BuildChatScript(LegacyReadChatExpressionTemplate, _layouts);
-        _observerExpression = BuildObserverExpression(_layouts);
-        _probeExpression = BuildChatScript(ProbeChatExpressionTemplate, _layouts);
+        IReadOnlyList<ChatLayout> layouts = BuildLayouts(custom);
+        _scripts = new ChatScripts(
+            key,
+            layouts,
+            BuildReadExpression(layouts),
+            BuildChatScript(LegacyReadChatExpressionTemplate, layouts),
+            BuildObserverExpression(layouts),
+            BuildChatScript(ProbeChatExpressionTemplate, layouts));
         _loggedLayoutSignature = null;
-        return hadLayouts;
+        return current is not null;
     }
 
-    // Probes the NUI frames in preference order and picks the first one that
-    // shows a known chat layout, falling back to the first usable frame.
+    private ChatScripts Scripts => _scripts ?? throw new InvalidOperationException("Chat scripts were not built.");
+
+    private sealed record ChatScripts(
+        string Key,
+        IReadOnlyList<ChatLayout> Layouts,
+        string Read,
+        string Legacy,
+        string Observer,
+        string Probe);
+
+    // Probes the NUI frames in preference order. A frame whose chat already
+    // shows lines wins; otherwise the first frame with an (empty) chat
+    // container; otherwise the first usable frame. A server that keeps the
+    // default chat loaded but empty next to its own chat UI therefore still
+    // gets its real chat read.
     private async Task<(string FrameId, int ContextId, ChatProbeResult? Probe)> PickChatFrameAsync(
         IReadOnlyList<string> frameIds,
         CancellationToken cancellationToken)
     {
         (string FrameId, int ContextId, ChatProbeResult? Probe)? first = null;
+        (string FrameId, int ContextId, ChatProbeResult? Probe)? emptyChat = null;
         foreach (string frameId in frameIds)
         {
             int contextId;
@@ -643,11 +672,13 @@ public sealed class CfxDevToolsChatReader : IAsyncDisposable
 
             ChatProbeResult? probe = await TryProbeAsync(contextId, cancellationToken);
             first ??= (frameId, contextId, probe);
-            if (probe is { Index: >= 0 })
+            if (probe is { HasLines: true })
                 return (frameId, contextId, probe);
+            if (probe is { HasChat: true })
+                emptyChat ??= (frameId, contextId, probe);
         }
 
-        return first ?? throw new IOException("Game chat execution context is unavailable.");
+        return emptyChat ?? first ?? throw new IOException("Game chat execution context is unavailable.");
     }
 
     // While the current frame shows no chat, look for a known layout in the
@@ -661,7 +692,8 @@ public sealed class CfxDevToolsChatReader : IAsyncDisposable
 
         ChatProbeResult? current = await TryProbeAsync(_contextId, cancellationToken);
         NoteProbe(current);
-        if (current is { Index: >= 0 }) return;
+        if (current is { HasLines: true }) return;
+        bool currentHasChat = current is { HasChat: true };
 
         JsonElement frameTree = await RequestAsync("Page.getFrameTree", new { }, cancellationToken);
         foreach (string frameId in CollectNuiFrameIds(frameTree))
@@ -686,9 +718,11 @@ public sealed class CfxDevToolsChatReader : IAsyncDisposable
                 continue;
             }
 
-            if (probe.Index >= 0)
+            // Move when another frame shows chat lines, or when the current
+            // frame has no chat container at all and another frame has one.
+            if (probe.HasLines || (probe.HasChat && !currentHasChat))
             {
-                DiagnosticLogger.Info($"Chat lines found in another NUI frame ({frameId}); reconnecting to it.");
+                DiagnosticLogger.Info($"Chat found in another NUI frame ({frameId}); reconnecting to it.");
                 _reconnectRequested = true;
                 return;
             }
@@ -716,11 +750,12 @@ public sealed class CfxDevToolsChatReader : IAsyncDisposable
 
     private async Task<ChatProbeResult?> TryProbeAsync(int contextId, CancellationToken cancellationToken)
     {
+        ChatScripts scripts = Scripts;
         try
         {
             JsonElement result = await RequestAsync("Runtime.evaluate", new
             {
-                expression = _probeExpression,
+                expression = scripts.Probe,
                 contextId,
                 returnByValue = true
             }, cancellationToken);
@@ -730,7 +765,9 @@ public sealed class CfxDevToolsChatReader : IAsyncDisposable
                 value.ValueKind != JsonValueKind.String)
                 return null;
 
-            return JsonSerializer.Deserialize<ChatProbeResult>(value.GetString()!);
+            ChatProbeResult? probe = JsonSerializer.Deserialize<ChatProbeResult>(value.GetString()!);
+            if (probe is not null) probe.Layouts = scripts.Layouts;
+            return probe;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -748,9 +785,10 @@ public sealed class CfxDevToolsChatReader : IAsyncDisposable
                 DiagnosticLogger.Warn($"Chat selector rejected by the page as invalid CSS: {invalid}");
         }
 
-        if (probe.Index < 0 || probe.Index >= _layouts.Count) return;
+        IReadOnlyList<ChatLayout> layouts = probe.Layouts ?? Scripts.Layouts;
+        if (probe.Index < 0 || probe.Index >= layouts.Count) return;
 
-        ChatLayout layout = _layouts[probe.Index];
+        ChatLayout layout = layouts[probe.Index];
         string signature = $"{layout.Container} | {layout.Rows} | {_frameId}";
         if (string.Equals(signature, _loggedLayoutSignature, StringComparison.Ordinal)) return;
 
@@ -817,7 +855,6 @@ public sealed class CfxDevToolsChatReader : IAsyncDisposable
         _requestId = 0;
         _frameId = null;
         _frameContexts.Clear();
-        _lastFrameSearchUtc = DateTime.MinValue;
         _currentServer = ServerSessionInfo.Unknown;
         _lastResolutionAddress = null;
         _lastResolutionAttemptUtc = DateTime.MinValue;
@@ -894,7 +931,7 @@ public sealed class CfxDevToolsChatReader : IAsyncDisposable
 
         Uri socketUri = new(debuggerUrl);
         if (!IsLoopback(socketUri))
-            throw new IOException("Refusing a non-local Game DevTools WebSocket endpoint.");
+            throw new IOException("Refusing a non-local game DevTools WebSocket endpoint.");
 
         var socket = new ClientWebSocket();
         socket.Options.Proxy = null;
@@ -935,7 +972,7 @@ public sealed class CfxDevToolsChatReader : IAsyncDisposable
             Interlocked.Increment(ref _readerGeneration);
             JsonElement observer = await RequestAsync("Runtime.evaluate", new
             {
-                expression = _observerExpression,
+                expression = Scripts.Observer,
                 contextId = _contextId,
                 returnByValue = true
             }, linked.Token);
@@ -1272,7 +1309,7 @@ public sealed class CfxDevToolsChatReader : IAsyncDisposable
         string signature = urls.Count == 0 ? "none" : string.Join(" | ", urls);
         if (string.Equals(signature, _lastFrameDiagnosticSignature, StringComparison.Ordinal)) return;
         _lastFrameDiagnosticSignature = signature;
-        string layouts = string.Join(", ", _layouts.Select(layout => $"{layout.Container} | {layout.Rows}"));
+        string layouts = string.Join(", ", Scripts.Layouts.Select(layout => $"{layout.Container} | {layout.Rows}"));
         DiagnosticLogger.Warn($"The game's root NUI was reached without a recognised chat layout. Exposed frame URLs: {signature}. Layouts tried: {layouts}");
     }
 
@@ -1652,6 +1689,12 @@ public sealed class CfxDevToolsChatReader : IAsyncDisposable
         public int Index { get; set; } = -1;
         public int RowCount { get; set; }
         public string[]? Invalid { get; set; }
+
+        [System.Text.Json.Serialization.JsonIgnore]
+        public IReadOnlyList<ChatLayout>? Layouts { get; set; }
+
+        public bool HasChat => Index >= 0;
+        public bool HasLines => Index >= 0 && RowCount > 0;
     }
 
     private sealed class ServerHint

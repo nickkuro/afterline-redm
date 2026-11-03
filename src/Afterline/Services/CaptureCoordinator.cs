@@ -200,6 +200,10 @@ public sealed class CaptureCoordinator : IAsyncDisposable
             throw new InvalidOperationException(LastError);
         }
 
+        CfxGame refreshedGame = CfxGameProcessService.Detect();
+        if (refreshedGame != CfxGame.None)
+            CurrentGame = refreshedGame;
+
         await _captureGate.WaitAsync(_cts.Token);
         try
         {
@@ -701,7 +705,7 @@ public sealed class CaptureCoordinator : IAsyncDisposable
         if (expectedInterruption)
         {
             DiagnosticLogger.Warn(
-                "game chat became temporarily unavailable; capture is reconnecting automatically.");
+                "Game chat became temporarily unavailable; capture is reconnecting automatically.");
             return;
         }
 
@@ -1192,7 +1196,7 @@ public sealed class CaptureCoordinator : IAsyncDisposable
 
         _captureGapDetectedAt = DateTime.Now;
         DiagnosticLogger.Warn(
-            "game chat UI reattached after live capture had begun. Afterline kept the new viewport as a baseline and did not import it, so no scrolled or late rows can be written out of order.");
+            "Game chat UI reattached after live capture had begun. Afterline kept the new viewport as a baseline and did not import it, so no scrolled or late rows can be written out of order.");
     }
 
     private void SetState(CaptureState state)

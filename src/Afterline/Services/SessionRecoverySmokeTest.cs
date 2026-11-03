@@ -529,6 +529,22 @@ internal static class SessionRecoverySmokeTest
                 throw new InvalidOperationException($"Screenshot process '{name}' was not classified as {expected}.");
         }
 
+        var choices = new (string[] Names, CfxGame Previous, CfxGame Expected)[]
+        {
+            (new[] { "explorer", "RedM", "RedM_GTAProcess" }, CfxGame.None, CfxGame.RedM),
+            (new[] { "FiveM", "RedM", "RedM_GTAProcess" }, CfxGame.FiveM, CfxGame.RedM),
+            (new[] { "FiveM_b3095_GTAProcess", "RedM" }, CfxGame.RedM, CfxGame.FiveM),
+            (new[] { "FiveM", "RedM" }, CfxGame.RedM, CfxGame.RedM),
+            (new[] { "RedM", "FiveM" }, CfxGame.None, CfxGame.FiveM),
+            (new[] { "explorer" }, CfxGame.RedM, CfxGame.None)
+        };
+        foreach ((string[] names, CfxGame previous, CfxGame expected) in choices)
+        {
+            if (CfxGameProcessService.Choose(names, previous) != expected)
+                throw new InvalidOperationException(
+                    $"Running processes [{string.Join(", ", names)}] were not resolved to {expected}.");
+        }
+
         DateTime at = DateTime.Today;
         string[] oocLines =
         {
@@ -565,7 +581,8 @@ internal static class SessionRecoverySmokeTest
             (".chat-list > .line", new ChatLayout(".chat-list", ":scope > .line")),
             ("#ui .log>p", new ChatLayout("#ui .log", ":scope > p")),
             ("div[data-x='a>b'] > li", new ChatLayout("div[data-x='a>b']", ":scope > li")),
-            (".chat-box", new ChatLayout(".chat-box", ":scope > *"))
+            (".chat-box", new ChatLayout(":root", ".chat-box")),
+            (".chat .line", new ChatLayout(":root", ".chat .line"))
         };
         foreach ((string input, ChatLayout expected) in customCases)
         {

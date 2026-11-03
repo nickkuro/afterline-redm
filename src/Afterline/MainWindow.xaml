@@ -480,8 +480,8 @@
                             </Grid>
                             <StackPanel Margin="0,10,0,0">
                                 <TextBlock Text="Custom chat selector (advanced)"/>
-                                <TextBox x:Name="ChatRowSelectorBox" Margin="0,6,0,0" ToolTip="For servers with a custom chat UI: the chat container and one line, as a CSS selector such as .chat-list &gt; .line. Leave empty to detect the chat layout automatically."/>
-                                <TextBlock Text="Format: container &gt; line, e.g. .chat-list &gt; .line. Leave empty to detect the chat layout automatically." Foreground="{DynamicResource MutedText}" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                                <TextBox x:Name="ChatRowSelectorBox" Margin="0,6,0,0" ToolTip="For servers with a custom chat UI: a CSS selector for each chat line, such as .chat-list .line, or the container and its lines, such as .chat-list &gt; .line. Leave empty to detect the chat layout automatically."/>
+                                <TextBlock Text="A selector for each chat line (e.g. .chat-list .line), or container &gt; line (e.g. .chat-list &gt; .line). Leave empty to detect the chat layout automatically." Foreground="{DynamicResource MutedText}" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0"/>
                             </StackPanel>
                         </StackPanel>
                     </Border>

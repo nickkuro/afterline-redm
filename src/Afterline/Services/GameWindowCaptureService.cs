@@ -72,7 +72,7 @@ public static class GameWindowCaptureService
             return false;
         }
 
-        if (!TryGetSupportedGameWindow(gameWindow, out _, out _, out reason))
+        if (!TryGetSupportedGameWindow(gameWindow, out _, out _, out _, out reason))
         {
             gameWindow = IntPtr.Zero;
             return false;
@@ -108,13 +108,13 @@ public static class GameWindowCaptureService
         string format = "PNG",
         int jpegQuality = 95)
     {
-        if (!TryGetSupportedGameWindow(gameWindow, out Rectangle bounds, out string title, out string reason))
+        if (!TryGetSupportedGameWindow(gameWindow, out Rectangle bounds, out string title, out CfxGame game, out string reason))
             throw new InvalidOperationException(reason);
 
         Directory.CreateDirectory(destinationFolder);
         bool useJpeg = string.Equals(format, "JPEG", StringComparison.OrdinalIgnoreCase);
         string timestamp = DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss-fff");
-        string gameName = GetWindowGame(gameWindow) == CfxGame.RedM ? "RedM" : "FiveM";
+        string gameName = game == CfxGame.RedM ? "RedM" : "FiveM";
         string filePath = Path.Combine(destinationFolder, $"Afterline_{gameName}_{timestamp}.{(useJpeg ? "jpg" : "png")}");
         string temporary = filePath + ".writing";
 
@@ -228,17 +228,20 @@ public static class GameWindowCaptureService
         IntPtr window,
         out Rectangle clientBounds,
         out string title,
+        out CfxGame game,
         out string reason)
     {
         clientBounds = Rectangle.Empty;
         title = string.Empty;
+        game = CfxGame.None;
         reason = "Afterline could not use that game window for capture.";
 
         if (window == IntPtr.Zero || !IsWindowVisible(window) || IsIconic(window))
             return false;
 
         _ = GetWindowThreadProcessId(window, out uint processId);
-        if (processId == 0 || !IsSupportedGameProcess((int)processId))
+        game = processId == 0 ? CfxGame.None : GetSupportedGame((int)processId);
+        if (game == CfxGame.None)
         {
             reason = "Afterline only captures a foreground FiveM or RedM game subprocess, GTA5.exe, GTAVLauncher.exe or RDR2.exe.";
             return false;
@@ -276,23 +279,16 @@ public static class GameWindowCaptureService
     private static bool IsSupportedGameProcess(int processId)
         => GetSupportedGame(processId) != CfxGame.None;
 
-    private static CfxGame GetWindowGame(IntPtr window)
-    {
-        _ = GetWindowThreadProcessId(window, out uint processId);
-        return processId == 0 ? CfxGame.None : GetSupportedGame((int)processId);
-    }
-
     // FiveM game subprocesses, GTA5 and GTAVLauncher belong to FiveM; RedM game
     // subprocesses and RDR2 belong to RedM.
     internal static CfxGame ClassifyCaptureProcess(string? name)
     {
-        if (string.IsNullOrWhiteSpace(name)) return CfxGame.None;
-        if (name.StartsWith("FiveM", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(name, "GTA5", StringComparison.OrdinalIgnoreCase) ||
+        CfxGame game = CfxGameProcessService.Classify(name);
+        if (game != CfxGame.None) return game;
+        if (string.Equals(name, "GTA5", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(name, "GTAVLauncher", StringComparison.OrdinalIgnoreCase))
             return CfxGame.FiveM;
-        if (name.StartsWith("RedM", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(name, "RDR2", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(name, "RDR2", StringComparison.OrdinalIgnoreCase))
             return CfxGame.RedM;
         return CfxGame.None;
     }
