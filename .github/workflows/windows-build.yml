@@ -37,14 +37,21 @@ jobs:
         run: |
           [xml]$project = Get-Content src/Afterline/Afterline.csproj
           $version = [string]($project.Project.PropertyGroup.Version | Select-Object -First 1)
-          $response = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs?branch=canary&per_page=100" | ConvertFrom-Json
-          $runs = @($response.workflow_runs | Where-Object {
-            $_.path -eq '.github/workflows/windows-build.yml' -and
-            $_.event -eq 'push' -and $_.run_number -le [int]$env:GITHUB_RUN_NUMBER -and
-            ($_.conclusion -eq 'success' -or $_.id -eq [long]$env:GITHUB_RUN_ID)
-          })
-          if (-not ($runs | Where-Object { $_.id -eq [long]$env:GITHUB_RUN_ID })) {
-            throw 'The current Canary build was missing from the build history.'
+          $isCanaryPush = $env:GITHUB_EVENT_NAME -eq 'push' -and $env:GITHUB_REF -eq 'refs/heads/canary'
+          if ($isCanaryPush) {
+            $response = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs?branch=canary&per_page=100" | ConvertFrom-Json
+            $runs = @($response.workflow_runs | Where-Object {
+              $_.path -eq '.github/workflows/windows-build.yml' -and
+              $_.event -eq 'push' -and $_.run_number -le [int]$env:GITHUB_RUN_NUMBER -and
+              ($_.conclusion -eq 'success' -or $_.id -eq [long]$env:GITHUB_RUN_ID)
+            })
+            if (-not ($runs | Where-Object { $_.id -eq [long]$env:GITHUB_RUN_ID })) {
+              throw 'The current Canary build was missing from the build history.'
+            }
+          } else {
+            # Manual runs on other branches (contributor or fork test builds)
+            # only produce an artifact and never publish, so embed just this run.
+            $runs = @(gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" | ConvertFrom-Json)
           }
           $history = @($runs | ForEach-Object {
             $title = [string]($_.head_commit.message -split "`n")[0]
