@@ -82,7 +82,7 @@ public partial class MainWindow
 
         if (_editorPage is not null)
             _editorPage.Visibility = Visibility.Collapsed;
-        ShowPage(DashboardPage, "Dashboard", "FiveM capture and session overview");
+        ShowPage(DashboardPage, "Dashboard", "FiveM and RedM capture and session overview");
         ApplyAutomaticEditorSidebarV068(false);
         ApplyEditorChromeCanary(false);
     }

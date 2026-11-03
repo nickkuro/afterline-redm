@@ -18,7 +18,7 @@ public partial class MainWindow
         if (parseButton is not null)
         {
             parseButton.ToolTip =
-                "Reads chat currently retained by FiveM. If FiveM is closed or no live chat can be read, Afterline restores the last session it captured from its persistent local cache.";
+                "Reads chat currently retained by FiveM or RedM. If the game is closed or no live chat can be read, Afterline restores the last session it captured from its persistent local cache.";
         }
     }
 

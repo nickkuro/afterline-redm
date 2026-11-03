@@ -115,7 +115,7 @@ public partial class MainWindow : Window
         }
         StreamerModePresentationService.Enabled = _settings.StreamerModeEnabled;
         SetupTrayIcon();
-        ShowPage(DashboardPage, "Dashboard", "FiveM capture and session overview");
+        ShowPage(DashboardPage, "Dashboard", "FiveM and RedM capture and session overview");
         DiagnosticLogger.Info("Startup: responsive shell displayed.");
 
         try
@@ -200,7 +200,7 @@ public partial class MainWindow : Window
 
         _trayIcon = new Forms.NotifyIcon
         {
-            Text = "Afterline — waiting for FiveM",
+            Text = "Afterline — waiting for FiveM or RedM",
             Icon = _trayBrandIcon ?? System.Drawing.SystemIcons.Application,
             Visible = true
         };
@@ -420,7 +420,7 @@ public partial class MainWindow : Window
 
         string pollStatus = _capture.LastSuccessfulReadAt is DateTime checkedAt
             ? $"Last successful capture check {Math.Max(0, (DateTime.Now - checkedAt).TotalSeconds):0}s ago"
-            : "Waiting for a successful FiveM check";
+            : "Waiting for a successful game check";
         AutosaveText.Text = _capture.LastCaptureAt is DateTime last
             ? $"Last message saved {Math.Max(0, (DateTime.Now - last).TotalSeconds):0}s ago · {pollStatus}"
             : $"Waiting for first chat message · {pollStatus}";
@@ -436,37 +436,37 @@ public partial class MainWindow : Window
             case CaptureState.Capturing:
                 status = "Capturing";
                 dot = (Brush)FindResource("Success");
-                FiveMStateText.Text = "Connected";
+                GameStateText.Text = "Connected";
                 FooterCaptureText.Text = "Chat capture active";
                 break;
             case CaptureState.WaitingForNui:
-                status = "FiveM detected — waiting for chat";
+                status = $"{_capture.CurrentGameName} detected — waiting for chat";
                 dot = (Brush)FindResource("Warning");
-                FiveMStateText.Text = "Detected";
+                GameStateText.Text = "Detected";
                 FooterCaptureText.Text = "Waiting for NUI";
                 break;
             case CaptureState.ReconnectGrace:
-                status = "FiveM disconnected — reconnect grace";
+                status = $"{_capture.CurrentGameName} disconnected — reconnect grace";
                 dot = (Brush)FindResource("Warning");
-                FiveMStateText.Text = "Reconnect grace";
+                GameStateText.Text = "Reconnect grace";
                 FooterCaptureText.Text = "Session protected on disk";
                 break;
-            case CaptureState.WaitingForFiveM when !_settings.AutoDetectFiveM:
-                status = "Automatic FiveM detection disabled";
+            case CaptureState.WaitingForGame when !_settings.AutoDetectGame:
+                status = "Automatic game detection disabled";
                 dot = (Brush)FindResource("MutedText");
-                FiveMStateText.Text = "Disabled";
+                GameStateText.Text = "Disabled";
                 FooterCaptureText.Text = "Enable automatic detection in Settings";
                 break;
-            case CaptureState.WaitingForFiveM when FiveMProcessService.IsRunning() && !_settings.AutoCapture:
-                status = "FiveM detected — automatic capture disabled";
+            case CaptureState.WaitingForGame when CfxGameProcessService.IsRunning() && !_settings.AutoCapture:
+                status = $"{_capture.CurrentGameName} detected — automatic capture disabled";
                 dot = (Brush)FindResource("Warning");
-                FiveMStateText.Text = "Detected";
+                GameStateText.Text = "Detected";
                 FooterCaptureText.Text = "Enable automatic capture in Settings";
                 break;
             default:
-                status = "Waiting for FiveM";
+                status = "Waiting for FiveM or RedM";
                 dot = (Brush)FindResource("MutedText");
-                FiveMStateText.Text = "Not detected";
+                GameStateText.Text = "Not detected";
                 FooterCaptureText.Text = "Capture idle";
                 break;
         }
@@ -592,7 +592,7 @@ public partial class MainWindow : Window
         StartWithWindowsCheck.IsChecked = _settings.StartWithWindows || StartupService.IsEnabled();
         StartMinimizedCheck.IsChecked = _settings.StartMinimized;
         MinimizeToTrayCheck.IsChecked = _settings.MinimizeToTray;
-        AutoDetectCheck.IsChecked = _settings.AutoDetectFiveM;
+        AutoDetectCheck.IsChecked = _settings.AutoDetectGame;
         AutoCaptureCheck.IsChecked = _settings.AutoCapture;
         SettingsShowLiveCheck.IsChecked = _settings.ShowLiveChat;
         AutoScrollCheck.IsChecked = _settings.AutoScrollLiveChat;
@@ -617,6 +617,7 @@ public partial class MainWindow : Window
         SelectComboItem(ReconnectBox, _settings.ReconnectGraceMinutes);
         SelectComboItem(ProcessingBox, _settings.ProcessingIntervalMinutes);
         SelectComboItem(MaxMessagesBox, _settings.MaxLiveMessages);
+        ChatRowSelectorBox.Text = _settings.ChatRowSelector;
         LiveChatList.Visibility = _settings.ShowLiveChat ? Visibility.Visible : Visibility.Collapsed;
         ApplyStreamerModePresentationV075();
     }
@@ -684,11 +685,11 @@ public partial class MainWindow : Window
         UpdateModernNavigationSelectionV090(page);
     }
 
-    private void DashboardNav_Click(object sender, RoutedEventArgs e) => ShowPage(DashboardPage, "Dashboard", "FiveM capture and session overview");
+    private void DashboardNav_Click(object sender, RoutedEventArgs e) => ShowPage(DashboardPage, "Dashboard", "FiveM and RedM capture and session overview");
     private void LiveNav_Click(object sender, RoutedEventArgs e)
     {
         if (!ConfirmStreamerSensitiveViewV076("Live Chat")) return;
-        ShowPage(LivePage, "Live Chat", "Optional real-time view of everything FiveM displays in chat");
+        ShowPage(LivePage, "Live Chat", "Optional real-time view of everything the game displays in chat");
     }
 
     private async void SearchNav_Click(object sender, RoutedEventArgs e)
@@ -919,7 +920,7 @@ public partial class MainWindow : Window
             _settings.StartWithWindows = StartWithWindowsCheck.IsChecked == true;
             _settings.StartMinimized = StartMinimizedCheck.IsChecked == true;
             _settings.MinimizeToTray = MinimizeToTrayCheck.IsChecked == true;
-            _settings.AutoDetectFiveM = AutoDetectCheck.IsChecked == true;
+            _settings.AutoDetectGame = AutoDetectCheck.IsChecked == true;
             _settings.AutoCapture = AutoCaptureCheck.IsChecked == true;
             _settings.ShowLiveChat = SettingsShowLiveCheck.IsChecked == true;
             _settings.AutoScrollLiveChat = AutoScrollCheck.IsChecked == true;
@@ -940,6 +941,7 @@ public partial class MainWindow : Window
             _settings.ReconnectGraceMinutes = ComboInt(ReconnectBox, 5);
             _settings.ProcessingIntervalMinutes = ComboInt(ProcessingBox, 1);
             _settings.MaxLiveMessages = ComboInt(MaxMessagesBox, 2000);
+            _settings.ChatRowSelector = ChatRowSelectorBox.Text.Trim();
             _settings.ArchiveRoot = string.IsNullOrWhiteSpace(ArchiveRootBox.Text) ? oldRoot : ArchiveRootBox.Text.Trim();
 
             Directory.CreateDirectory(_settings.ArchiveRoot);

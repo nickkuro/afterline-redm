@@ -33,7 +33,7 @@ public static class GameWindowCaptureService
     public static bool TryFindGameWindowForAfterlineCapture(out IntPtr gameWindow, out string reason)
     {
         gameWindow = IntPtr.Zero;
-        reason = "Bring FiveM, GTA5, or GTAVLauncher into the game before capturing.";
+        reason = "Bring FiveM, GTA5, GTAVLauncher, RedM or RDR2 into the game before capturing.";
         if (!IsAfterlineForeground()) return false;
 
         long largestArea = 0;
@@ -65,7 +65,7 @@ public static class GameWindowCaptureService
     public static bool TryGetForegroundGameWindow(out IntPtr gameWindow, out string reason)
     {
         gameWindow = GetForegroundWindow();
-        reason = "Bring FiveM, GTA5, or GTAVLauncher to the foreground before capturing.";
+        reason = "Bring FiveM, GTA5, GTAVLauncher, RedM or RDR2 to the foreground before capturing.";
         if (gameWindow == IntPtr.Zero || !IsWindowVisible(gameWindow) || IsIconic(gameWindow))
         {
             gameWindow = IntPtr.Zero;
@@ -114,7 +114,8 @@ public static class GameWindowCaptureService
         Directory.CreateDirectory(destinationFolder);
         bool useJpeg = string.Equals(format, "JPEG", StringComparison.OrdinalIgnoreCase);
         string timestamp = DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss-fff");
-        string filePath = Path.Combine(destinationFolder, $"Afterline_FiveM_{timestamp}.{(useJpeg ? "jpg" : "png")}");
+        string gameName = GetWindowGame(gameWindow) == CfxGame.RedM ? "RedM" : "FiveM";
+        string filePath = Path.Combine(destinationFolder, $"Afterline_{gameName}_{timestamp}.{(useJpeg ? "jpg" : "png")}");
         string temporary = filePath + ".writing";
 
         try
@@ -239,7 +240,7 @@ public static class GameWindowCaptureService
         _ = GetWindowThreadProcessId(window, out uint processId);
         if (processId == 0 || !IsSupportedGameProcess((int)processId))
         {
-            reason = "Afterline only captures a foreground FiveM game subprocess, GTA5.exe, or GTAVLauncher.exe.";
+            reason = "Afterline only captures a foreground FiveM or RedM game subprocess, GTA5.exe, GTAVLauncher.exe or RDR2.exe.";
             return false;
         }
 
@@ -273,15 +274,36 @@ public static class GameWindowCaptureService
     }
 
     private static bool IsSupportedGameProcess(int processId)
+        => GetSupportedGame(processId) != CfxGame.None;
+
+    private static CfxGame GetWindowGame(IntPtr window)
+    {
+        _ = GetWindowThreadProcessId(window, out uint processId);
+        return processId == 0 ? CfxGame.None : GetSupportedGame((int)processId);
+    }
+
+    // FiveM game subprocesses, GTA5 and GTAVLauncher belong to FiveM; RedM game
+    // subprocesses and RDR2 belong to RedM.
+    internal static CfxGame ClassifyCaptureProcess(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return CfxGame.None;
+        if (name.StartsWith("FiveM", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(name, "GTA5", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(name, "GTAVLauncher", StringComparison.OrdinalIgnoreCase))
+            return CfxGame.FiveM;
+        if (name.StartsWith("RedM", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(name, "RDR2", StringComparison.OrdinalIgnoreCase))
+            return CfxGame.RedM;
+        return CfxGame.None;
+    }
+
+    private static CfxGame GetSupportedGame(int processId)
     {
         try
         {
             using Process process = Process.GetProcessById(processId);
-            string name = process.ProcessName;
-            bool expectedName = name.StartsWith("FiveM", StringComparison.OrdinalIgnoreCase) ||
-                                string.Equals(name, "GTA5", StringComparison.OrdinalIgnoreCase) ||
-                                string.Equals(name, "GTAVLauncher", StringComparison.OrdinalIgnoreCase);
-            if (!expectedName) return false;
+            CfxGame game = ClassifyCaptureProcess(process.ProcessName);
+            if (game == CfxGame.None) return CfxGame.None;
 
             try
             {
@@ -289,22 +311,20 @@ public static class GameWindowCaptureService
                 if (!string.IsNullOrWhiteSpace(executable))
                 {
                     string fileName = Path.GetFileNameWithoutExtension(executable);
-                    return fileName.StartsWith("FiveM", StringComparison.OrdinalIgnoreCase) ||
-                           string.Equals(fileName, "GTA5", StringComparison.OrdinalIgnoreCase) ||
-                           string.Equals(fileName, "GTAVLauncher", StringComparison.OrdinalIgnoreCase);
+                    return ClassifyCaptureProcess(fileName) == game ? game : CfxGame.None;
                 }
             }
             catch { }
 
-            return true;
+            return game;
         }
-        catch { return false; }
+        catch { return CfxGame.None; }
     }
 
     private static string GetWindowTitle(IntPtr window)
     {
         int length = GetWindowTextLength(window);
-        if (length <= 0) return "FiveM game window";
+        if (length <= 0) return "Game window";
         var builder = new StringBuilder(length + 1);
         _ = GetWindowText(window, builder, builder.Capacity);
         return builder.ToString();

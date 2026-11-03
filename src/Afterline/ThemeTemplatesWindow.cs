@@ -399,7 +399,7 @@ internal sealed class ThemeTemplatesWindow : Window
         page.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         var title = new StackPanel();
         title.Children.Add(new TextBlock { Text = "Dashboard", FontSize = 22, FontWeight = FontWeights.SemiBold });
-        title.Children.Add(new TextBlock { Text = "FiveM capture and session overview", FontSize = 10.5, Margin = new Thickness(0, 3, 0, 0) }.WithResource(TextBlock.ForegroundProperty, "MutedText"));
+        title.Children.Add(new TextBlock { Text = "FiveM and RedM capture and session overview", FontSize = 10.5, Margin = new Thickness(0, 3, 0, 0) }.WithResource(TextBlock.ForegroundProperty, "MutedText"));
         page.Children.Add(title);
 
         var summary = new UniformGrid { Columns = 3 };

@@ -46,7 +46,7 @@ internal static class UnifiedChatFormatter
                 result.Add(new EditorChatLine(
                     line.SourceIndex,
                     line.PlainText,
-                    "Captured from FiveM",
+                    "Captured from game",
                     exactSegments));
                 continue;
             }

@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using Afterline.Models;
 using System.Windows.Media;
 
 namespace Afterline.Services;
@@ -230,6 +231,9 @@ internal static class EditorChatFormatter
             bool pm = ContainsAny(trimmed, " PM ", "PM to", "PM from", "Incoming PM", "Outgoing PM", "Gelen PM", "Giden PM");
             return Single(body, pm ? Yellow : Gray);
         }
+
+        if (ChatEntry.StartsWithOocTag(trimmed))
+            return Single(body, Gray);
 
         if (IsPhoneAction(trimmed) || trimmed.StartsWith("*", StringComparison.Ordinal) || trimmed.StartsWith(">", StringComparison.Ordinal))
             return Single(body, Purple);

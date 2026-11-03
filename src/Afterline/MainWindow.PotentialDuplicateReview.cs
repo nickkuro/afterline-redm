@@ -259,14 +259,14 @@ public partial class MainWindow
         int lineCount = candidates.Sum(candidate => candidate.Lines.Count);
         _potentialDuplicateReviewText.Text =
             $"Review {lineCount:N0} highlighted potential duplicate line{(lineCount == 1 ? string.Empty : "s")}. " +
-            "Their displayed FiveM timestamps are preserved exactly. All lines remain in the local .txt until you explicitly remove them.";
+            "Their displayed game timestamps are preserved exactly. All lines remain in the local .txt until you explicitly remove them.";
         bool activeJournal = _journal.HasActiveSession && string.Equals(
             _journal.ActiveFile,
             journalPath,
             StringComparison.OrdinalIgnoreCase);
         _potentialDuplicateRemoveButton!.IsEnabled = !activeJournal;
         _potentialDuplicateRemoveButton.ToolTip = activeJournal
-            ? "End the active FiveM session before rewriting its chatlog."
+            ? "End the active game session before rewriting its chatlog."
             : "Create a backup, then remove only the exact highlighted ranges from the chatlog.";
         if (activeJournal)
             _potentialDuplicateReviewText.Text += " End the active session before removal becomes available.";
@@ -317,7 +317,7 @@ public partial class MainWindow
         {
             System.Windows.MessageBox.Show(
                 this,
-                "End the active FiveM session before changing its chatlog.",
+                "End the active game session before changing its chatlog.",
                 "Chatlog is still active",
                 MessageBoxButton.OK,
                 MessageBoxImage.Information);

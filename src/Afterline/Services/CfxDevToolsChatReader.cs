@@ -17,15 +17,45 @@ internal sealed record ObservedChatSnapshot(
     long ReaderGeneration = 0,
     bool IsChatSurfaceUnavailable = false);
 
-public sealed class FiveMDevToolsChatReader : IAsyncDisposable
+// One chat layout: the element that holds the chat lines, and a selector,
+// relative to that element, that matches one element per line.
+internal sealed record ChatLayout(string Container, string Rows);
+
+// Reads the chat shown in the local CitizenFX NUI through the game's local
+// DevTools endpoint. FiveM and RedM share this NUI stack.
+public sealed class CfxDevToolsChatReader : IAsyncDisposable
 {
     private static readonly Uri TargetsUri = new("http://127.0.0.1:13172/json");
     private const string RootUiUrl = "nui://game/ui/root.html";
+    private const string NuiFramePrefix = "https://cfx-nui-";
     private const string ClientFramePrefix = "https://cfx-nui-client/";
+    private const string ChatFramePrefix = "https://cfx-nui-chat/";
     private const string ChatChangedBinding = "afterlineChatChanged";
+    private const string HelpersPlaceholder = "__AFTERLINE_CHAT_HELPERS__";
+    private const string LayoutsPlaceholder = "__AFTERLINE_CHAT_LAYOUTS__";
+    private static readonly TimeSpan FrameSearchInterval = TimeSpan.FromSeconds(15);
 
-    private const string ReadChatExpression = """
+    // Chat layouts tried in order. A layout wins when its container exists and
+    // holds at least one line; the first entry is the layout Afterline has
+    // always read, so existing FiveM servers behave exactly as before.
+    internal static readonly IReadOnlyList<ChatLayout> KnownLayouts = new[]
+    {
+        new ChatLayout(".chat__messages", ":scope > li"),
+        new ChatLayout(".chat-messages", ".msg"),
+        new ChatLayout(".chat-messages", ".message"),
+        new ChatLayout("#messages", ".msg")
+    };
+
+    // Page-side helpers shared by every chat script. Layouts arrive as a JSON
+    // array, so selector text can never break out of a string literal.
+    private const string ChatLayoutHelpers =
+        "function afterlineChatRows(container,layout){try{return Array.from(container.querySelectorAll(layout.Rows));}catch(_){return [];}}" +
+        "function afterlineIsDirectRows(layout){return !!layout&&layout.Rows.lastIndexOf(':scope >',0)===0;}" +
+        "function afterlineFindChat(layouts){var fallback=null;for(var i=0;i<layouts.length;i++){var container=null;try{container=document.querySelector(layouts[i].Container);}catch(_){continue;}if(!container)continue;var rows=afterlineChatRows(container,layouts[i]);if(rows.length)return {container:container,layout:layouts[i],index:i,rows:rows};if(!fallback)fallback={container:container,layout:layouts[i],index:i,rows:[]};}return fallback||{container:null,layout:null,index:-1,rows:[]};}";
+
+    private const string ReadChatExpressionTemplate = """
         JSON.stringify((function(){
+          __AFTERLINE_CHAT_HELPERS__
           function readColor(node){
             try {
               var element=node.nodeType===1?node:node.parentElement;
@@ -174,19 +204,19 @@ public sealed class FiveMDevToolsChatReader : IAsyncDisposable
           // It retains timestamps rendered through data attributes/pseudo
           // elements and captures colour runs without re-reading a viewport.
           window.__afterlineReadChatRow=readRow;
-          return Array.from(document.querySelectorAll('.chat__messages > li'))
+          return afterlineFindChat(__AFTERLINE_CHAT_LAYOUTS__).rows
             .map(readRow)
             .filter(function(line){return line.Text.length>0;});
         })())
         """;
 
-    private static readonly string InstallChatObserverExpression =
-        "(function(){" +
+    private const string InstallChatObserverTemplate =
+        "(function(){" + HelpersPlaceholder +
         "var binding=window['" + ChatChangedBinding + "'];" +
         "if(typeof binding!=='function') return false;" +
         "var previous=window.__afterlineChatObserver;" +
         "if(previous){try{previous.chatObserver&&previous.chatObserver.disconnect();}catch(_){}try{previous.rootObserver&&previous.rootObserver.disconnect();}catch(_){}try{previous.messageHandler&&window.removeEventListener('message',previous.messageHandler,true);}catch(_){}}" +
-        "var state={chat:null,chatObserver:null,rootObserver:null,messageHandler:null,frame:0,knownRows:null,pendingRows:[],isBaseline:false,unavailableReported:false};" +
+        "var state={chat:null,chatObserver:null,rootObserver:null,messageHandler:null,frame:0,knownRows:null,pendingRows:[],isBaseline:false,unavailableReported:false,layout:null,layoutIndex:-1,hasRows:false};" +
         // Chat timestamps are only useful at the point a row arrives. Do not
         // debounce a busy scene: one animation frame lets FiveM finish the DOM
         // write while preserving the earliest practical observation time.
@@ -195,17 +225,30 @@ public sealed class FiveMDevToolsChatReader : IAsyncDisposable
         // emit it as an event instead of silently absorbing it into a viewport
         // baseline. A player can scroll that viewport, but the mutation itself
         // is authoritative that this row just appeared.
-        "function emit(){state.frame=0;try{var baseline=state.isBaseline&&state.pendingRows.length===0;var lines=baseline?" + ReadChatExpression + ":[];var added=[];if(!baseline){state.pendingRows.forEach(function(row){var line=readAddedRow(row);if(line)added.push(line);});}state.pendingRows=[];state.isBaseline=false;binding(JSON.stringify({ObservedAtUnixMilliseconds:Date.now(),LinesJson:lines,AddedLinesJson:JSON.stringify(added),IsBaseline:baseline}));}catch(_){}}" +
+        "function emit(){state.frame=0;try{var baseline=state.isBaseline&&state.pendingRows.length===0;var lines=baseline?" + ReadChatExpressionTemplate + ":[];var added=[];if(!baseline){state.pendingRows.forEach(function(row){var line=readAddedRow(row);if(line)added.push(line);});}state.pendingRows=[];state.isBaseline=false;binding(JSON.stringify({ObservedAtUnixMilliseconds:Date.now(),LinesJson:lines,AddedLinesJson:JSON.stringify(added),IsBaseline:baseline}));}catch(_){}}" +
         "function schedule(){if(!state.frame)state.frame=requestAnimationFrame(emit);}" +
-        "function attach(){var chat=document.querySelector('.chat__messages');if(chat===state.chat)return;if(state.chatObserver)state.chatObserver.disconnect();state.chat=chat;state.chatObserver=null;state.pendingRows=[];state.knownRows=new WeakSet();if(!chat){if(!state.unavailableReported){state.unavailableReported=true;binding(JSON.stringify({ObservedAtUnixMilliseconds:Date.now(),LinesJson:'[]',IsChatSurfaceUnavailable:true}));}return;}state.unavailableReported=false;Array.from(chat.children).forEach(function(node){if(node&&node.matches&&node.matches('li'))state.knownRows.add(node);});state.isBaseline=true;state.chatObserver=new MutationObserver(function(records){records.forEach(function(record){if(record.type!=='childList'||record.target!==state.chat)return;Array.from(record.addedNodes).forEach(function(node){if(!node||!node.matches||!node.matches('li')||state.knownRows.has(node))return;state.knownRows.add(node);if(state.pendingRows.indexOf(node)<0)state.pendingRows.push(node);});});if(state.pendingRows.length)schedule();});state.chatObserver.observe(chat,{childList:true});schedule();}" +
+        // Watch the first layout whose container holds chat lines. Direct-child
+        // layouts only observe the container's children, as before; descendant
+        // layouts observe its subtree. New lines are any matching rows not yet
+        // known, in DOM order.
+        "function attach(){var current=state.chat;if(current&&current.isConnected&&state.hasRows)return;var found=afterlineFindChat(" + LayoutsPlaceholder + ");var chat=found.container;if(chat===state.chat&&found.index===state.layoutIndex){if(chat&&found.rows.length)state.hasRows=true;return;}if(state.chatObserver)state.chatObserver.disconnect();state.chat=chat;state.layout=found.layout;state.layoutIndex=found.index;state.hasRows=found.rows.length>0;state.chatObserver=null;state.pendingRows=[];state.knownRows=new WeakSet();if(!chat){if(!state.unavailableReported){state.unavailableReported=true;binding(JSON.stringify({ObservedAtUnixMilliseconds:Date.now(),LinesJson:'[]',IsChatSurfaceUnavailable:true}));}return;}state.unavailableReported=false;found.rows.forEach(function(node){state.knownRows.add(node);});state.isBaseline=true;state.chatObserver=new MutationObserver(function(records){if(!records.some(function(record){return record.type==='childList';}))return;afterlineChatRows(state.chat,state.layout).forEach(function(node){if(state.knownRows.has(node))return;state.knownRows.add(node);state.hasRows=true;if(state.pendingRows.indexOf(node)<0)state.pendingRows.push(node);});if(state.pendingRows.length)schedule();});state.chatObserver.observe(chat,{childList:true,subtree:!afterlineIsDirectRows(state.layout)});schedule();}" +
         "state.rootObserver=new MutationObserver(attach);state.rootObserver.observe(document.documentElement,{childList:true,subtree:true});" +
         "window.__afterlineChatObserver=state;attach();return true;" +
         "})()";
 
-    private const string LegacyReadChatExpression =
-        "JSON.stringify(Array.from(document.querySelectorAll('.chat__messages > li'))" +
+    private const string LegacyReadChatExpressionTemplate =
+        "JSON.stringify((function(){" + HelpersPlaceholder +
+        "return afterlineFindChat(" + LayoutsPlaceholder + ").rows" +
         ".map(function(el){return (el.innerText || '').replace(/\\s+/g,' ').trim();})" +
-        ".filter(function(x){return x.length > 0;}))";
+        ".filter(function(x){return x.length > 0;});})())";
+
+    // Reports which layout matches in the evaluated frame, and which layouts
+    // the page rejects as invalid CSS.
+    private const string ProbeChatExpressionTemplate =
+        "JSON.stringify((function(){" + HelpersPlaceholder +
+        "var layouts=" + LayoutsPlaceholder + ";var invalid=[];" +
+        "layouts.forEach(function(layout){try{document.querySelector(layout.Container);document.createElement('div').querySelector(layout.Rows);}catch(_){invalid.push(layout.Container+' | '+layout.Rows);}});" +
+        "var found=afterlineFindChat(layouts);return {Index:found.index,RowCount:found.rows.length,Invalid:invalid};})())";
 
     // Prefer FiveM's documented loading-screen handover data when it is exposed
     // in the evaluated NUI page. For already-connected sessions, keep only the
@@ -252,7 +295,10 @@ public sealed class FiveMDevToolsChatReader : IAsyncDisposable
 
     private static readonly JsonElement EmptyResult = CreateEmptyResult();
 
+    private readonly Func<string?> _customRowSelector;
     private readonly HttpClient _http;
+    private readonly ConcurrentDictionary<string, int> _frameContexts = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, byte> _reportedInvalidLayouts = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<int, TaskCompletionSource<JsonElement>> _pendingRequests = new();
     private readonly SemaphoreSlim _connectionGate = new(1, 1);
     private readonly SemaphoreSlim _sendGate = new(1, 1);
@@ -280,11 +326,23 @@ public sealed class FiveMDevToolsChatReader : IAsyncDisposable
     private bool _eventCaptureAvailable;
     private string[] _lastExactVisibleText = Array.Empty<string>();
     private long _readerGeneration;
+    private IReadOnlyList<ChatLayout> _layouts = KnownLayouts;
+    private string? _layoutKey;
+    private string _readExpression = string.Empty;
+    private string _legacyExpression = string.Empty;
+    private string _observerExpression = string.Empty;
+    private string _probeExpression = string.Empty;
+    private volatile bool _reconnectRequested;
+    private string? _frameId;
+    private string? _loggedLayoutSignature;
+    private DateTime _lastFrameSearchUtc = DateTime.MinValue;
 
     public ServerSessionInfo CurrentServer => _currentServer;
 
-    public FiveMDevToolsChatReader()
+    public CfxDevToolsChatReader(Func<string?>? customRowSelector = null)
     {
+        _customRowSelector = customRowSelector ?? (() => null);
+        UpdateLayouts();
         var handler = new HttpClientHandler { UseProxy = false };
         _http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(2) };
     }
@@ -295,12 +353,12 @@ public sealed class FiveMDevToolsChatReader : IAsyncDisposable
         await RefreshServerInfoAsync(cancellationToken);
 
         if (string.IsNullOrWhiteSpace(_currentServer.Address))
-            throw new IOException("FiveM is running but is not currently connected to a server.");
+            throw new IOException("The game is running but is not currently connected to a server.");
 
         try
         {
             string? json = await EvaluateChatExpressionAsync(
-                ReadChatExpression,
+                _readExpression,
                 cancellationToken);
             if (!string.IsNullOrWhiteSpace(json))
             {
@@ -308,6 +366,8 @@ public sealed class FiveMDevToolsChatReader : IAsyncDisposable
                     ?? Array.Empty<CapturedChatLine>();
                 lines = await StabilizeNewChatRowsAsync(lines, cancellationToken);
                 _exactColorFallbackLogged = false;
+                if (lines.Length == 0)
+                    await CheckOtherFramesForChatAsync(cancellationToken);
                 return lines
                     .Where(line => !string.IsNullOrWhiteSpace(line.Text))
                     .Select(NormalizeCapturedLine)
@@ -320,13 +380,13 @@ public sealed class FiveMDevToolsChatReader : IAsyncDisposable
             {
                 _exactColorFallbackLogged = true;
                 DiagnosticLogger.Error(
-                    "FiveM exact-color extraction failed; falling back to plain chat capture.",
+                    "Exact-color extraction failed; falling back to plain chat capture.",
                     ex);
             }
         }
 
         string? legacyJson = await EvaluateChatExpressionAsync(
-            LegacyReadChatExpression,
+            _legacyExpression,
             cancellationToken);
         string[] legacyLines = string.IsNullOrWhiteSpace(legacyJson)
             ? Array.Empty<string>()
@@ -401,7 +461,7 @@ public sealed class FiveMDevToolsChatReader : IAsyncDisposable
             {
                 await Task.Delay(TimeSpan.FromMilliseconds(25), cancellationToken);
                 string? retryJson = await EvaluateChatExpressionAsync(
-                    ReadChatExpression,
+                    _readExpression,
                     cancellationToken);
                 if (string.IsNullOrWhiteSpace(retryJson)) break;
 
@@ -472,6 +532,233 @@ public sealed class FiveMDevToolsChatReader : IAsyncDisposable
         return new CapturedChatLine(text, runs);
     }
 
+    // Custom layout first (when set), then the known layouts, without duplicates.
+    internal static IReadOnlyList<ChatLayout> BuildLayouts(string? customSelector)
+    {
+        var layouts = new List<ChatLayout>(KnownLayouts.Count + 1);
+        ChatLayout? custom = ParseCustomLayout(customSelector);
+        if (custom is not null) layouts.Add(custom);
+        foreach (ChatLayout known in KnownLayouts)
+        {
+            if (!layouts.Contains(known))
+                layouts.Add(known);
+        }
+        return layouts;
+    }
+
+    // "container > line" splits at the last top-level child combinator; the
+    // line part matches direct children of the container. Without a ">", the
+    // whole value is the container and each of its children is a line.
+    internal static ChatLayout? ParseCustomLayout(string? value)
+    {
+        string? text = NullIfBlank(value);
+        if (text is null) return null;
+
+        int split = FindLastTopLevelChildCombinator(text);
+        if (split > 0 && split < text.Length - 1)
+        {
+            string container = text[..split].Trim();
+            string rows = text[(split + 1)..].Trim();
+            if (container.Length > 0 && rows.Length > 0)
+                return new ChatLayout(container, ":scope > " + rows);
+        }
+
+        return new ChatLayout(text, ":scope > *");
+    }
+
+    private static int FindLastTopLevelChildCombinator(string selector)
+    {
+        int depth = 0;
+        int last = -1;
+        char quote = '\0';
+        for (int i = 0; i < selector.Length; i++)
+        {
+            char c = selector[i];
+            if (quote != '\0')
+            {
+                if (c == '\\') i++;
+                else if (c == quote) quote = '\0';
+                continue;
+            }
+
+            if (c == '"' || c == '\'') quote = c;
+            else if (c == '[' || c == '(') depth++;
+            else if ((c == ']' || c == ')') && depth > 0) depth--;
+            else if (c == '>' && depth == 0) last = i;
+        }
+        return last;
+    }
+
+    internal static string BuildChatScript(string template, IReadOnlyList<ChatLayout> layouts)
+        => template
+            .Replace(HelpersPlaceholder, ChatLayoutHelpers, StringComparison.Ordinal)
+            .Replace(LayoutsPlaceholder, JsonSerializer.Serialize(layouts), StringComparison.Ordinal);
+
+    internal static string BuildReadExpression(IReadOnlyList<ChatLayout> layouts)
+        => BuildChatScript(ReadChatExpressionTemplate, layouts);
+
+    internal static string BuildObserverExpression(IReadOnlyList<ChatLayout> layouts)
+        => BuildChatScript(InstallChatObserverTemplate, layouts);
+
+    // Rebuilds the page scripts when the custom selector setting changes.
+    // Returns true when the layouts differ from the ones last used.
+    private bool UpdateLayouts()
+    {
+        string? custom;
+        try { custom = NullIfBlank(_customRowSelector()); }
+        catch { custom = null; }
+
+        string key = custom ?? string.Empty;
+        if (string.Equals(key, _layoutKey, StringComparison.Ordinal)) return false;
+
+        bool hadLayouts = _layoutKey is not null;
+        _layoutKey = key;
+        _layouts = BuildLayouts(custom);
+        _readExpression = BuildReadExpression(_layouts);
+        _legacyExpression = BuildChatScript(LegacyReadChatExpressionTemplate, _layouts);
+        _observerExpression = BuildObserverExpression(_layouts);
+        _probeExpression = BuildChatScript(ProbeChatExpressionTemplate, _layouts);
+        _loggedLayoutSignature = null;
+        return hadLayouts;
+    }
+
+    // Probes the NUI frames in preference order and picks the first one that
+    // shows a known chat layout, falling back to the first usable frame.
+    private async Task<(string FrameId, int ContextId, ChatProbeResult? Probe)> PickChatFrameAsync(
+        IReadOnlyList<string> frameIds,
+        CancellationToken cancellationToken)
+    {
+        (string FrameId, int ContextId, ChatProbeResult? Probe)? first = null;
+        foreach (string frameId in frameIds)
+        {
+            int contextId;
+            try
+            {
+                contextId = await GetFrameContextAsync(frameId, cancellationToken);
+            }
+            catch (IOException)
+            {
+                continue;
+            }
+
+            ChatProbeResult? probe = await TryProbeAsync(contextId, cancellationToken);
+            first ??= (frameId, contextId, probe);
+            if (probe is { Index: >= 0 })
+                return (frameId, contextId, probe);
+        }
+
+        return first ?? throw new IOException("Game chat execution context is unavailable.");
+    }
+
+    // While the current frame shows no chat, look for a known layout in the
+    // other NUI frames (custom chat resources run in their own frame) and
+    // reconnect to it. Rate-limited so an empty chat doesn't cause constant
+    // scanning.
+    private async Task CheckOtherFramesForChatAsync(CancellationToken cancellationToken)
+    {
+        if (DateTime.UtcNow - _lastFrameSearchUtc < FrameSearchInterval) return;
+        _lastFrameSearchUtc = DateTime.UtcNow;
+
+        ChatProbeResult? current = await TryProbeAsync(_contextId, cancellationToken);
+        NoteProbe(current);
+        if (current is { Index: >= 0 }) return;
+
+        JsonElement frameTree = await RequestAsync("Page.getFrameTree", new { }, cancellationToken);
+        foreach (string frameId in CollectNuiFrameIds(frameTree))
+        {
+            if (string.Equals(frameId, _frameId, StringComparison.Ordinal)) continue;
+
+            int contextId;
+            try
+            {
+                contextId = await GetFrameContextAsync(frameId, cancellationToken);
+            }
+            catch (IOException)
+            {
+                continue;
+            }
+
+            ChatProbeResult? probe = await TryProbeAsync(contextId, cancellationToken);
+            if (probe is null)
+            {
+                // The frame navigated or was removed; its context is stale.
+                _frameContexts.TryRemove(frameId, out _);
+                continue;
+            }
+
+            if (probe.Index >= 0)
+            {
+                DiagnosticLogger.Info($"Chat lines found in another NUI frame ({frameId}); reconnecting to it.");
+                _reconnectRequested = true;
+                return;
+            }
+        }
+    }
+
+    private async Task<int> GetFrameContextAsync(string frameId, CancellationToken cancellationToken)
+    {
+        if (_frameContexts.TryGetValue(frameId, out int cached)) return cached;
+
+        JsonElement isolatedWorld = await RequestAsync("Page.createIsolatedWorld", new
+        {
+            frameId,
+            worldName = "afterline-reader",
+            grantUniveralAccess = false
+        }, cancellationToken);
+
+        if (!isolatedWorld.TryGetProperty("executionContextId", out JsonElement context))
+            throw new IOException("Game chat execution context is unavailable.");
+
+        int contextId = context.GetInt32();
+        _frameContexts[frameId] = contextId;
+        return contextId;
+    }
+
+    private async Task<ChatProbeResult?> TryProbeAsync(int contextId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            JsonElement result = await RequestAsync("Runtime.evaluate", new
+            {
+                expression = _probeExpression,
+                contextId,
+                returnByValue = true
+            }, cancellationToken);
+
+            if (!result.TryGetProperty("result", out JsonElement runtimeResult) ||
+                !runtimeResult.TryGetProperty("value", out JsonElement value) ||
+                value.ValueKind != JsonValueKind.String)
+                return null;
+
+            return JsonSerializer.Deserialize<ChatProbeResult>(value.GetString()!);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return null;
+        }
+    }
+
+    private void NoteProbe(ChatProbeResult? probe)
+    {
+        if (probe is null) return;
+
+        foreach (string invalid in probe.Invalid ?? Array.Empty<string>())
+        {
+            if (_reportedInvalidLayouts.TryAdd(invalid, 0))
+                DiagnosticLogger.Warn($"Chat selector rejected by the page as invalid CSS: {invalid}");
+        }
+
+        if (probe.Index < 0 || probe.Index >= _layouts.Count) return;
+
+        ChatLayout layout = _layouts[probe.Index];
+        string signature = $"{layout.Container} | {layout.Rows} | {_frameId}";
+        if (string.Equals(signature, _loggedLayoutSignature, StringComparison.Ordinal)) return;
+
+        _loggedLayoutSignature = signature;
+        DiagnosticLogger.Info(
+            $"Reading chat with container \"{layout.Container}\" and lines \"{layout.Rows}\" in NUI frame {_frameId ?? "(unknown)"}.");
+    }
+
     private async Task<string?> EvaluateChatExpressionAsync(
         string expression,
         CancellationToken cancellationToken)
@@ -518,7 +805,7 @@ public sealed class FiveMDevToolsChatReader : IAsyncDisposable
         }
         connectionCts?.Dispose();
 
-        var resetException = new IOException("FiveM DevTools connection was reset.");
+        var resetException = new IOException("Game DevTools connection was reset.");
         foreach ((int id, TaskCompletionSource<JsonElement> completion) in _pendingRequests)
         {
             if (_pendingRequests.TryRemove(id, out _))
@@ -528,6 +815,9 @@ public sealed class FiveMDevToolsChatReader : IAsyncDisposable
 
         _contextId = 0;
         _requestId = 0;
+        _frameId = null;
+        _frameContexts.Clear();
+        _lastFrameSearchUtc = DateTime.MinValue;
         _currentServer = ServerSessionInfo.Unknown;
         _lastResolutionAddress = null;
         _lastResolutionAttemptUtc = DateTime.MinValue;
@@ -539,12 +829,15 @@ public sealed class FiveMDevToolsChatReader : IAsyncDisposable
 
     private async Task EnsureConnectedAsync(CancellationToken cancellationToken)
     {
-        if (_socket?.State == WebSocketState.Open && _contextId != 0) return;
+        // A changed custom selector needs the observer reinstalled.
+        if (UpdateLayouts())
+            _reconnectRequested = true;
+        if (!_reconnectRequested && _socket?.State == WebSocketState.Open && _contextId != 0) return;
 
         await _connectionGate.WaitAsync(cancellationToken);
         try
         {
-            if (_socket?.State == WebSocketState.Open && _contextId != 0) return;
+            if (!_reconnectRequested && _socket?.State == WebSocketState.Open && _contextId != 0) return;
             await EnsureConnectedCoreAsync(cancellationToken);
         }
         finally
@@ -556,6 +849,7 @@ public sealed class FiveMDevToolsChatReader : IAsyncDisposable
     private async Task EnsureConnectedCoreAsync(CancellationToken cancellationToken)
     {
         await ResetAsync();
+        _reconnectRequested = false;
 
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         linked.CancelAfter(TimeSpan.FromSeconds(2));
@@ -580,7 +874,7 @@ public sealed class FiveMDevToolsChatReader : IAsyncDisposable
         if (string.IsNullOrWhiteSpace(debuggerUrl))
         {
             LogChangedTargetDiagnostic(targets.RootElement);
-            throw new IOException("FiveM root NUI target is not available yet.");
+            throw new IOException("The game's root NUI target is not available yet.");
         }
 
         _lastTargetDiagnosticSignature = null;
@@ -589,7 +883,7 @@ public sealed class FiveMDevToolsChatReader : IAsyncDisposable
             if (!_multipleRootTargetsLogged)
             {
                 DiagnosticLogger.Warn(
-                    $"FiveM exposed {rootTargetCount} root NUI targets; Afterline selected the first debugger-capable entry.");
+                    $"The game exposed {rootTargetCount} root NUI targets; Afterline selected the first debugger-capable entry.");
                 _multipleRootTargetsLogged = true;
             }
         }
@@ -600,7 +894,7 @@ public sealed class FiveMDevToolsChatReader : IAsyncDisposable
 
         Uri socketUri = new(debuggerUrl);
         if (!IsLoopback(socketUri))
-            throw new IOException("Refusing a non-local FiveM DevTools WebSocket endpoint.");
+            throw new IOException("Refusing a non-local Game DevTools WebSocket endpoint.");
 
         var socket = new ClientWebSocket();
         socket.Options.Proxy = null;
@@ -611,25 +905,23 @@ public sealed class FiveMDevToolsChatReader : IAsyncDisposable
         _receivePump = Task.Run(() => ReceivePumpAsync(socket, connectionCts.Token));
 
         JsonElement frameTree = await RequestAsync("Page.getFrameTree", new { }, linked.Token);
-        string? frameId = FindClientFrameId(frameTree);
-        if (string.IsNullOrWhiteSpace(frameId))
+        IReadOnlyList<string> frameIds = CollectNuiFrameIds(frameTree);
+        if (frameIds.Count == 0)
         {
             LogChangedFrameDiagnostic(frameTree);
-            throw new IOException("FiveM client chat frame is not available yet.");
+            throw new IOException("The game's chat frame is not available yet.");
         }
-        _lastFrameDiagnosticSignature = null;
 
-        JsonElement isolatedWorld = await RequestAsync("Page.createIsolatedWorld", new
-        {
-            frameId,
-            worldName = "afterline-reader",
-            grantUniveralAccess = false
-        }, linked.Token);
+        (string frameId, int contextId, ChatProbeResult? probe) =
+            await PickChatFrameAsync(frameIds, linked.Token);
+        if (probe is { Index: >= 0 })
+            _lastFrameDiagnosticSignature = null;
+        else
+            LogChangedFrameDiagnostic(frameTree);
 
-        if (!isolatedWorld.TryGetProperty("executionContextId", out JsonElement context))
-            throw new IOException("FiveM chat execution context is unavailable.");
-
-        _contextId = context.GetInt32();
+        _frameId = frameId;
+        _contextId = contextId;
+        NoteProbe(probe);
 
         try
         {
@@ -643,7 +935,7 @@ public sealed class FiveMDevToolsChatReader : IAsyncDisposable
             Interlocked.Increment(ref _readerGeneration);
             JsonElement observer = await RequestAsync("Runtime.evaluate", new
             {
-                expression = InstallChatObserverExpression,
+                expression = _observerExpression,
                 contextId = _contextId,
                 returnByValue = true
             }, linked.Token);
@@ -652,7 +944,7 @@ public sealed class FiveMDevToolsChatReader : IAsyncDisposable
                 observerResult.TryGetProperty("value", out JsonElement observerValue) &&
                 observerValue.ValueKind == JsonValueKind.True;
             if (!_eventCaptureAvailable)
-                throw new IOException("FiveM chat observer could not be installed.");
+                throw new IOException("Game chat observer could not be installed.");
 
             _observerFallbackLogged = false;
         }
@@ -663,7 +955,7 @@ public sealed class FiveMDevToolsChatReader : IAsyncDisposable
             {
                 _observerFallbackLogged = true;
                 DiagnosticLogger.Warn(
-                    $"Immediate FiveM chat events are unavailable; using rapid reconciliation capture. {ex.Message}");
+                    $"Immediate game chat events are unavailable; using rapid reconciliation capture. {ex.Message}");
             }
         }
     }
@@ -680,7 +972,7 @@ public sealed class FiveMDevToolsChatReader : IAsyncDisposable
             {
                 _missingServerHintLogged = true;
                 DiagnosticLogger.Warn(
-                    "FiveM chat NUI was reached, but its root page did not expose an active server address. Check automatic capture settings and export this report if the state persists while connected.");
+                    "Game chat NUI was reached, but its root page did not expose an active server address. Check automatic capture settings and export this report if the state persists while connected.");
             }
             _currentServer = ServerSessionInfo.Unknown;
             _lastResolutionAddress = null;
@@ -970,7 +1262,7 @@ public sealed class FiveMDevToolsChatReader : IAsyncDisposable
         string signature = urls.Count == 0 ? "none" : string.Join(" | ", urls);
         if (string.Equals(signature, _lastTargetDiagnosticSignature, StringComparison.Ordinal)) return;
         _lastTargetDiagnosticSignature = signature;
-        DiagnosticLogger.Warn($"FiveM DevTools target check found no root NUI target. Exposed target URLs: {signature}");
+        DiagnosticLogger.Warn($"Game DevTools target check found no root NUI target. Exposed target URLs: {signature}");
     }
 
     private void LogChangedFrameDiagnostic(JsonElement frameTree)
@@ -980,7 +1272,8 @@ public sealed class FiveMDevToolsChatReader : IAsyncDisposable
         string signature = urls.Count == 0 ? "none" : string.Join(" | ", urls);
         if (string.Equals(signature, _lastFrameDiagnosticSignature, StringComparison.Ordinal)) return;
         _lastFrameDiagnosticSignature = signature;
-        DiagnosticLogger.Warn($"FiveM root NUI was reached without a client chat frame. Exposed frame URLs: {signature}");
+        string layouts = string.Join(", ", _layouts.Select(layout => $"{layout.Container} | {layout.Rows}"));
+        DiagnosticLogger.Warn($"The game's root NUI was reached without a recognised chat layout. Exposed frame URLs: {signature}. Layouts tried: {layouts}");
     }
 
     private static void CollectFrameUrls(JsonElement value, ICollection<string> urls)
@@ -1009,14 +1302,14 @@ public sealed class FiveMDevToolsChatReader : IAsyncDisposable
     {
         ClientWebSocket? socket = _socket;
         if (socket is null || socket.State != WebSocketState.Open)
-            throw new IOException("FiveM DevTools is not connected.");
+            throw new IOException("Game DevTools is not connected.");
 
         int id = Interlocked.Increment(ref _requestId);
         byte[] payload = JsonSerializer.SerializeToUtf8Bytes(new { id, method, @params = parameters });
         var completion = new TaskCompletionSource<JsonElement>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         if (!_pendingRequests.TryAdd(id, completion))
-            throw new IOException("FiveM DevTools request identifier collision.");
+            throw new IOException("Game DevTools request identifier collision.");
 
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         linked.CancelAfter(TimeSpan.FromSeconds(2));
@@ -1039,7 +1332,7 @@ public sealed class FiveMDevToolsChatReader : IAsyncDisposable
             JsonElement response = await completion.Task.WaitAsync(linked.Token);
 
             if (response.TryGetProperty("error", out _))
-                throw new IOException($"FiveM DevTools rejected {method}.");
+                throw new IOException($"Game DevTools rejected {method}.");
 
             return response.TryGetProperty("result", out JsonElement result)
                 ? result.Clone()
@@ -1082,7 +1375,7 @@ public sealed class FiveMDevToolsChatReader : IAsyncDisposable
         }
         finally
         {
-            Exception reason = failure ?? new IOException("FiveM DevTools connection closed.");
+            Exception reason = failure ?? new IOException("Game DevTools connection closed.");
             foreach ((int id, TaskCompletionSource<JsonElement> completion) in _pendingRequests)
             {
                 if (_pendingRequests.TryRemove(id, out _))
@@ -1124,7 +1417,7 @@ public sealed class FiveMDevToolsChatReader : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            DiagnosticLogger.Error("FiveM chat-change event could not be decoded.", ex);
+            DiagnosticLogger.Error("Game chat-change event could not be decoded.", ex);
         }
     }
 
@@ -1185,7 +1478,7 @@ public sealed class FiveMDevToolsChatReader : IAsyncDisposable
             snapshot.AddedLines[0].Text != line.Text ||
             snapshot.Lines[0].ColorRuns.Count != 1)
         {
-            throw new InvalidOperationException("Immediate FiveM chat event decoding failed.");
+            throw new InvalidOperationException("Immediate game chat event decoding failed.");
         }
 
         string baselinePayload = JsonSerializer.Serialize(new ObserverEnvelope
@@ -1200,7 +1493,7 @@ public sealed class FiveMDevToolsChatReader : IAsyncDisposable
             baseline.AddedLines is not { Count: 0 })
         {
             throw new InvalidOperationException(
-                "FiveM chat baseline was not kept separate from appended events.");
+                "Game chat baseline was not kept separate from appended events.");
         }
 
         string unavailablePayload = JsonSerializer.Serialize(new ObserverEnvelope
@@ -1214,9 +1507,10 @@ public sealed class FiveMDevToolsChatReader : IAsyncDisposable
             !unavailable.IsChatSurfaceUnavailable)
         {
             throw new InvalidOperationException(
-                "FiveM chat surface loss was not surfaced to the capture coordinator.");
+                "Game chat surface loss was not surfaced to the capture coordinator.");
         }
 
+        string observerExpression = BuildObserverExpression(KnownLayouts);
         string[] requiredObserverFeatures =
         {
             "new MutationObserver",
@@ -1232,20 +1526,24 @@ public sealed class FiveMDevToolsChatReader : IAsyncDisposable
             "IsBaseline:baseline",
             "IsChatSurfaceUnavailable:true",
             ChatChangedBinding,
-            "function schedule(){if(!state.frame)state.frame=requestAnimationFrame(emit);}"
+            "function schedule(){if(!state.frame)state.frame=requestAnimationFrame(emit);}",
+            "function afterlineFindChat(layouts)",
+            "afterlineIsDirectRows(state.layout)"
         };
         if (requiredObserverFeatures.Any(feature =>
-                !InstallChatObserverExpression.Contains(feature, StringComparison.Ordinal)))
+                !observerExpression.Contains(feature, StringComparison.Ordinal)))
         {
-            throw new InvalidOperationException("Immediate FiveM chat observer is incomplete.");
+            throw new InvalidOperationException("Immediate game chat observer is incomplete.");
         }
 
-        if (InstallChatObserverExpression.Contains("quietDelay", StringComparison.Ordinal) ||
-            InstallChatObserverExpression.Contains("window.addEventListener('message'", StringComparison.Ordinal) ||
-            InstallChatObserverExpression.Contains("rows.indexOf(row)", StringComparison.Ordinal))
+        if (observerExpression.Contains(HelpersPlaceholder, StringComparison.Ordinal) ||
+            observerExpression.Contains(LayoutsPlaceholder, StringComparison.Ordinal) ||
+            observerExpression.Contains("quietDelay", StringComparison.Ordinal) ||
+            observerExpression.Contains("window.addEventListener('message'", StringComparison.Ordinal) ||
+            observerExpression.Contains("rows.indexOf(row)", StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
-                "Immediate FiveM chat observer still batches or reacts to unrelated window messages.");
+                "Immediate game chat observer still batches or reacts to unrelated window messages.");
         }
     }
 
@@ -1257,7 +1555,7 @@ public sealed class FiveMDevToolsChatReader : IAsyncDisposable
             _receiveBuffer.AsMemory(),
             cancellationToken);
         if (first.MessageType == WebSocketMessageType.Close)
-            throw new IOException("FiveM DevTools connection closed.");
+            throw new IOException("Game DevTools connection closed.");
 
         if (first.EndOfMessage)
         {
@@ -1275,7 +1573,7 @@ public sealed class FiveMDevToolsChatReader : IAsyncDisposable
                 _receiveBuffer.AsMemory(),
                 cancellationToken);
             if (result.MessageType == WebSocketMessageType.Close)
-                throw new IOException("FiveM DevTools connection closed.");
+                throw new IOException("Game DevTools connection closed.");
 
             stream.Write(_receiveBuffer, 0, result.Count);
             if (result.EndOfMessage) break;
@@ -1301,30 +1599,44 @@ public sealed class FiveMDevToolsChatReader : IAsyncDisposable
         return document.RootElement.Clone();
     }
 
-    private static string? FindClientFrameId(JsonElement result)
+    // NUI resource frames in preference order: the "client" frame Afterline has
+    // always read, then the default Cfx chat resource, then every other
+    // cfx-nui-<resource> frame (custom chat UIs).
+    internal static IReadOnlyList<string> CollectNuiFrameIds(JsonElement result)
     {
-        if (!result.TryGetProperty("frameTree", out JsonElement frameTree)) return null;
-        return FindClientFrameIdRecursive(frameTree);
+        var frames = new List<(string Id, string Url)>();
+        if (result.TryGetProperty("frameTree", out JsonElement frameTree))
+            CollectNuiFramesRecursive(frameTree, frames);
+
+        return frames
+            .OrderBy(frame => FramePriority(frame.Url))
+            .Select(frame => frame.Id)
+            .ToArray();
     }
 
-    private static string? FindClientFrameIdRecursive(JsonElement tree)
+    private static int FramePriority(string url)
+    {
+        if (url.StartsWith(ClientFramePrefix, StringComparison.OrdinalIgnoreCase)) return 0;
+        if (url.StartsWith(ChatFramePrefix, StringComparison.OrdinalIgnoreCase)) return 1;
+        return 2;
+    }
+
+    private static void CollectNuiFramesRecursive(JsonElement tree, List<(string Id, string Url)> frames)
     {
         if (tree.TryGetProperty("frame", out JsonElement frame) &&
             frame.TryGetProperty("url", out JsonElement url) &&
-            url.GetString()?.StartsWith(ClientFramePrefix, StringComparison.OrdinalIgnoreCase) == true &&
-            frame.TryGetProperty("id", out JsonElement id))
-            return id.GetString();
+            url.GetString() is string urlText &&
+            urlText.StartsWith(NuiFramePrefix, StringComparison.OrdinalIgnoreCase) &&
+            frame.TryGetProperty("id", out JsonElement id) &&
+            id.GetString() is string idText &&
+            !string.IsNullOrWhiteSpace(idText))
+            frames.Add((idText, urlText));
 
         if (!tree.TryGetProperty("childFrames", out JsonElement children) || children.ValueKind != JsonValueKind.Array)
-            return null;
+            return;
 
         foreach (JsonElement child in children.EnumerateArray())
-        {
-            string? match = FindClientFrameIdRecursive(child);
-            if (match is not null) return match;
-        }
-
-        return null;
+            CollectNuiFramesRecursive(child, frames);
     }
 
     public async ValueTask DisposeAsync()
@@ -1333,6 +1645,13 @@ public sealed class FiveMDevToolsChatReader : IAsyncDisposable
         _connectionGate.Dispose();
         _sendGate.Dispose();
         _http.Dispose();
+    }
+
+    private sealed class ChatProbeResult
+    {
+        public int Index { get; set; } = -1;
+        public int RowCount { get; set; }
+        public string[]? Invalid { get; set; }
     }
 
     private sealed class ServerHint

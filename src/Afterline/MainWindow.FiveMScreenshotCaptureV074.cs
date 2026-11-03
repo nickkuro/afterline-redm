@@ -103,7 +103,7 @@ public partial class MainWindow
         title.Children.Add(new TextBlock { Text = "Gallery", FontSize = 18, FontWeight = FontWeights.SemiBold });
         title.Children.Add(new TextBlock
         {
-            Text = "Files are stored locally. The latest 20 source-resolution captures are shown here; capture is permitted only while FiveM, GTA5, or GTAVLauncher owns the foreground window.",
+            Text = "Files are stored locally. The latest 20 source-resolution captures are shown here; capture is permitted only while FiveM, GTA5, GTAVLauncher, RedM or RDR2 owns the foreground window.",
             Foreground = (Brush)FindResource("MutedText"),
             TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 4, 0, 0),
@@ -282,7 +282,7 @@ public partial class MainWindow
                 throw new InvalidOperationException(reason);
             }
 
-            SetFiveMScreenshotStatusV074("Capturing the foreground FiveM game window…");
+            SetFiveMScreenshotStatusV074("Capturing the foreground game window…");
             GameWindowCaptureService.CaptureResult result = await Task.Run(
                 () => GameWindowCaptureService.CaptureGameWindow(
                     gameWindow,
@@ -298,7 +298,7 @@ public partial class MainWindow
         }
         catch (Exception ex)
         {
-            DiagnosticLogger.Error("FiveM screenshot capture failed.", ex);
+            DiagnosticLogger.Error("Game screenshot capture failed.", ex);
             SetFiveMScreenshotStatusV074(ex.Message);
             ShowScreenshotCaptureFailureNotificationV076(ex.Message);
         }
@@ -353,7 +353,7 @@ public partial class MainWindow
         }
         catch (Exception ex)
         {
-            DiagnosticLogger.Error("Unable to refresh the FiveM screenshot gallery.", ex);
+            DiagnosticLogger.Error("Unable to refresh the game screenshot gallery.", ex);
             return Array.Empty<FiveMScreenshotGalleryItemV074>();
         }
     }
@@ -460,7 +460,7 @@ public partial class MainWindow
             _settings.ScreenshotHotkey = "Ctrl+Shift+F12";
             modifiers = ModControlV074 | ModShiftV074;
             virtualKey = (uint)KeyInterop.VirtualKeyFromKey(Key.F12);
-            DiagnosticLogger.Info("Invalid FiveM screenshot hotkey was reset to Ctrl+Shift+F12.");
+            DiagnosticLogger.Info("Invalid game screenshot hotkey was reset to Ctrl+Shift+F12.");
         }
 
         if (TryGetScreenshotMouseButtonV076(_settings.ScreenshotHotkey, out int mouseButton))
@@ -497,7 +497,7 @@ public partial class MainWindow
         _fiveMScreenshotHotkeySourceV074 = HwndSource.FromHwnd(handle);
         if (_fiveMScreenshotHotkeySourceV074 is null)
         {
-            DiagnosticLogger.Error("Unable to register the FiveM screenshot hotkey because Afterline has no window handle.");
+            DiagnosticLogger.Error("Unable to register the game screenshot hotkey because Afterline has no window handle.");
             return false;
         }
 
@@ -513,7 +513,7 @@ public partial class MainWindow
         {
             _fiveMScreenshotHotkeySourceV074.RemoveHook(FiveMScreenshotHotkeyWndProcV074);
             _fiveMScreenshotHotkeySourceV074 = null;
-            DiagnosticLogger.Error($"Unable to register FiveM screenshot hotkey '{_settings.ScreenshotHotkey}'. It may already be in use.");
+            DiagnosticLogger.Error($"Unable to register game screenshot hotkey '{_settings.ScreenshotHotkey}'. It may already be in use.");
             if (showFailure)
             {
                 System.Windows.MessageBox.Show(

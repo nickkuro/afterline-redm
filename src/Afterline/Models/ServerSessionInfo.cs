@@ -7,6 +7,7 @@ public sealed class ServerSessionInfo
         "CitizenFX root UI",
         "CitizenFX",
         "FiveM",
+        "RedM",
         "Cfx.re",
         "root",
         "NUI",

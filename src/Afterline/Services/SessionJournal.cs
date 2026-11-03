@@ -276,7 +276,7 @@ public sealed class SessionJournal
                     // The plain-text journal is authoritative. Exact server colors
                     // are optional presentation metadata and must never block it.
                     DiagnosticLogger.Error(
-                        "Exact FiveM chat colors could not be saved for Log Reader playback.",
+                        "Exact game chat colors could not be saved for Log Reader playback.",
                         ex);
                 }
             }

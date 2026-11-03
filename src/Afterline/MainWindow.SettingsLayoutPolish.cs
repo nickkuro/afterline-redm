@@ -16,7 +16,7 @@ public partial class MainWindow
         StackPanel? settingsStack = FindSettingsStackPanel();
         if (settingsStack is null) return;
 
-        Border? startupCard = FindDirectSettingsCard(settingsStack, "Startup & FiveM");
+        Border? startupCard = FindDirectSettingsCard(settingsStack, "Startup & Game");
         Border? captureCard = FindDirectSettingsCard(settingsStack, "Capture & processing");
         Border? storageCard = FindDirectSettingsCard(settingsStack, "Chatlog storage");
         Border? recoveryCard = FindDirectSettingsCard(settingsStack, "Recovery Center");

@@ -93,7 +93,7 @@ public partial class MainWindow
             string label = button.Content?.ToString() ?? string.Empty;
             button.ToolTip = label switch
             {
-                "Dashboard" => "View recent sessions and FiveM status.",
+                "Dashboard" => "View recent sessions and game status.",
                 "Live Chat" => "View the active chat session.",
                 "Search" => "Search stored chatlogs.",
                 "Archive" => "Browse recent chatlogs.",

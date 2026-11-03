@@ -24,6 +24,12 @@ public sealed class ChatEntry
         @"^/b(?:\s|$)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+    // Common text RP out-of-character tags: [OOC], (OOC), OOC: and the local
+    // variants [LOOC], (LOOC), LOOC:.
+    private static readonly Regex OocTagPrefix = new(
+        @"^(?:\[L?OOC\]|\(L?OOC\)|L?OOC\s*:)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
     private static readonly Regex AdminPunishmentNotice = new(
         @"^Admin\s+.+?\s+(?:(?:permanently|temporarily)\s+)?(?:Rockstar\s+)?(?:banned|kicked|jailed|muted|warned)\s+.+?\s+for reason:\s*",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -113,9 +119,13 @@ public sealed class ChatEntry
             if (IsSystemMessage || IsPrivateMessage) return false;
             string content = ContentWithoutTimestamp.Trim();
             return content.StartsWith("((", StringComparison.Ordinal) ||
-                   OocCommandPrefix.IsMatch(content);
+                   OocCommandPrefix.IsMatch(content) ||
+                   StartsWithOocTag(content);
         }
     }
+
+    public static bool StartsWithOocTag(string content)
+        => OocTagPrefix.IsMatch(content.TrimStart());
 
     public bool IsOocLine => IsPrivateMessage || IsOocChatLine || IsInfoLine;
 

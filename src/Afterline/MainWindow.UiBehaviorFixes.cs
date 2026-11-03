@@ -56,10 +56,11 @@ public partial class MainWindow
     {
         if (_capture.State != CaptureState.WaitingForNui) return;
 
-        TopStatusText.Text = "FiveM Detected";
-        TrayStateText.Text = "FiveM Detected";
+        string detected = $"{_capture.CurrentGameName} Detected";
+        TopStatusText.Text = detected;
+        TrayStateText.Text = detected;
 
         if (_trayIcon is not null)
-            _trayIcon.Text = "Afterline — FiveM Detected";
+            _trayIcon.Text = "Afterline — " + detected;
     }
 }

@@ -80,7 +80,7 @@ public partial class MainWindow
             "Replay cached sessions and inspect recovery state.");
         _settingsSectionsCanaryV2["failsafe"] = WrapSettingsSectionCanaryV2(failsafe,
             "Raw Capture Failsafe",
-            "Recover the latest pre-parse FiveM chat snapshot.");
+            "Recover the latest pre-parse game chat snapshot.");
         _settingsSectionsCanaryV2["canary"] = WrapSettingsSectionCanaryV2(canary,
             "Canary Branch",
             "Opt into experimental builds or return to Stable.");

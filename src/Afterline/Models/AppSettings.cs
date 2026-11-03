@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Afterline.Models;
 
 public sealed class AppSettings
@@ -9,7 +11,12 @@ public sealed class AppSettings
     public bool StartWithWindows { get; set; }
     public bool StartMinimized { get; set; } = true;
     public bool MinimizeToTray { get; set; } = true;
-    public bool AutoDetectFiveM { get; set; } = true;
+    // Kept under the original JSON name so existing settings files keep their value.
+    [JsonPropertyName("AutoDetectFiveM")]
+    public bool AutoDetectGame { get; set; } = true;
+    // Empty means detect the chat layout automatically. Otherwise a CSS
+    // selector written as "container > line", or just the container.
+    public string ChatRowSelector { get; set; } = string.Empty;
     public bool AutoCapture { get; set; } = true;
     public bool ShowLiveChat { get; set; } = true;
     public bool ShowOocChat { get; set; } = true;
@@ -20,7 +27,8 @@ public sealed class AppSettings
     public bool UseWindowsArchiveNotifications { get; set; }
     public bool StreamerModeEnabled { get; set; }
     // Screenshot capture is opt-in at the application level: it only registers a
-    // global hotkey while enabled, and never polls or captures outside FiveM/GTA.
+    // global hotkey while enabled, and never polls or captures outside FiveM/GTA
+    // or RedM/RDR2. The property keeps its original name so saved settings load.
     public bool EnableFiveMScreenshotCapture { get; set; } = true;
     public string ScreenshotFolder { get; set; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),

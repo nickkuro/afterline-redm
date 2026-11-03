@@ -23,7 +23,7 @@ public partial class MainWindow
         if (_roleplayColorsCheck is not null)
         {
             _roleplayColorsCheck.Content = "Automatic chat colors";
-            _roleplayColorsCheck.ToolTip = "Infer RP colors when FiveM does not provide exact colors. Exact server and faction colors are always preserved.";
+            _roleplayColorsCheck.ToolTip = "Infer RP colors when the game does not provide exact colors. Exact server and faction colors are always preserved.";
         }
 
         if (_logReaderRpCheck is not null)

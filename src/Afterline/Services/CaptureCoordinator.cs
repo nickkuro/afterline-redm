@@ -6,7 +6,7 @@ namespace Afterline.Services;
 
 public enum CaptureState
 {
-    WaitingForFiveM,
+    WaitingForGame,
     WaitingForNui,
     Capturing,
     ReconnectGrace,
@@ -20,7 +20,7 @@ public sealed class CaptureCoordinator : IAsyncDisposable
         @"^\[(?<time>\d{1,2}:\d{2}:\d{2})\]",
         RegexOptions.Compiled);
 
-    private readonly FiveMDevToolsChatReader _reader = new();
+    private readonly CfxDevToolsChatReader _reader;
     private readonly SessionJournal _journal;
     private readonly LastSessionCacheService _lastSessionCache = new();
     private readonly RawCaptureFailsafeService _rawCaptureFailsafe = new();
@@ -49,6 +49,8 @@ public sealed class CaptureCoordinator : IAsyncDisposable
     public DateTime? LastSuccessfulReadAt { get; private set; }
     public string? LastError { get; private set; }
     public ServerSessionInfo? CurrentServer => _currentServer;
+    public CfxGame CurrentGame { get; private set; } = CfxGame.None;
+    public string CurrentGameName => CfxGameProcessService.DisplayName(CurrentGame);
     public long LastEventSequence => Interlocked.Read(ref _eventSequence);
     public DateTime? LastEventObservedAt => _lastEventObservedAt;
     public DateTime? CaptureGapDetectedAt => _captureGapDetectedAt;
@@ -67,6 +69,7 @@ public sealed class CaptureCoordinator : IAsyncDisposable
     {
         _journal = journal;
         _settings = settings;
+        _reader = new CfxDevToolsChatReader(() => _settings().ChatRowSelector);
         _persistSettings = persistSettings;
     }
 
@@ -98,8 +101,10 @@ public sealed class CaptureCoordinator : IAsyncDisposable
             bool liveReadSucceeded = false;
             int captured = 0;
 
-            if (FiveMProcessService.IsRunning())
+            CfxGame runningGame = CfxGameProcessService.Detect();
+            if (runningGame != CfxGame.None)
             {
+                CurrentGame = runningGame;
                 try
                 {
                     AppSettings settings = _settings();
@@ -169,7 +174,7 @@ public sealed class CaptureCoordinator : IAsyncDisposable
             {
                 if (liveReadError is not null)
                     throw new InvalidOperationException(
-                        "Unable to read the current FiveM chat and no cached previous session is available.",
+                        "Unable to read the current game chat and no cached previous session is available.",
                         liveReadError);
 
                 throw new InvalidOperationException(
@@ -188,10 +193,10 @@ public sealed class CaptureCoordinator : IAsyncDisposable
     public async Task<int> RefreshConnectionAsync()
     {
         AppSettings settings = _settings();
-        if (!FiveMProcessService.Refresh())
+        if (!CfxGameProcessService.Refresh())
         {
-            await HandleFiveMAbsentAsync(settings);
-            LastError = "FiveM is not running.";
+            await HandleGameAbsentAsync(settings);
+            LastError = "FiveM or RedM is not running.";
             throw new InvalidOperationException(LastError);
         }
 
@@ -248,11 +253,11 @@ public sealed class CaptureCoordinator : IAsyncDisposable
         catch (Exception ex)
         {
             LastError = ex.Message;
-            LogCaptureFailure("Manual FiveM reconnection failed.", ex);
+            LogCaptureFailure("Manual game reconnection failed.", ex);
             await _reader.ResetAsync();
             SetState(CaptureState.WaitingForNui);
             throw new InvalidOperationException(
-                "FiveM was detected, but Afterline could not reconnect to its active chat.",
+                "The game was detected, but Afterline could not reconnect to its active chat.",
                 ex);
         }
         finally
@@ -278,20 +283,22 @@ public sealed class CaptureCoordinator : IAsyncDisposable
             try
             {
                 AppSettings settings = _settings();
-                bool fiveMRunning =
-                    settings.AutoDetectFiveM &&
-                    FiveMProcessService.IsRunning();
+                CfxGame detectedGame = settings.AutoDetectGame
+                    ? CfxGameProcessService.Detect()
+                    : CfxGame.None;
+                if (detectedGame != CfxGame.None)
+                    CurrentGame = detectedGame;
 
-                if (!fiveMRunning)
+                if (detectedGame == CfxGame.None)
                 {
-                    await HandleFiveMAbsentAsync(settings);
+                    await HandleGameAbsentAsync(settings);
                     await Task.Delay(TimeSpan.FromSeconds(3), _cts.Token);
                     continue;
                 }
 
                 if (!settings.AutoCapture)
                 {
-                    SetState(CaptureState.WaitingForFiveM);
+                    SetState(CaptureState.WaitingForGame);
                     await Task.Delay(TimeSpan.FromSeconds(3), _cts.Token);
                     continue;
                 }
@@ -417,7 +424,7 @@ public sealed class CaptureCoordinator : IAsyncDisposable
                 catch (Exception ex)
                 {
                     LastError = ex.Message;
-                    LogCaptureFailure("Automatic FiveM chat capture failed; capture will retry.", ex);
+                    LogCaptureFailure("Automatic game chat capture failed; capture will retry.", ex);
                     await _reader.ResetAsync();
                     await HandleNuiUnavailableCoreAsync(
                         settings,
@@ -537,7 +544,7 @@ public sealed class CaptureCoordinator : IAsyncDisposable
         if (preventConfirmedReplay)
         {
             DiagnosticLogger.Warn(
-                $"Prevented confirmed FiveM chat-buffer replay: {replay.CandidateCount:N0} row(s), " +
+                $"Prevented confirmed game chat-buffer replay: {replay.CandidateCount:N0} row(s), " +
                 replay.Evidence);
         }
 
@@ -694,7 +701,7 @@ public sealed class CaptureCoordinator : IAsyncDisposable
         if (expectedInterruption)
         {
             DiagnosticLogger.Warn(
-                "FiveM chat became temporarily unavailable; capture is reconnecting automatically.");
+                "game chat became temporarily unavailable; capture is reconnecting automatically.");
             return;
         }
 
@@ -766,11 +773,11 @@ public sealed class CaptureCoordinator : IAsyncDisposable
         }
     }
 
-    private async Task HandleFiveMAbsentAsync(AppSettings settings)
+    private async Task HandleGameAbsentAsync(AppSettings settings)
     {
         CaptureState idleState = GetDisconnectedIdleState(
             settings,
-            CaptureState.WaitingForFiveM);
+            CaptureState.WaitingForGame);
         if (!_journal.HasActiveSession &&
             _currentServer is null &&
             _nuiUnavailableSince is null &&
@@ -968,7 +975,7 @@ public sealed class CaptureCoordinator : IAsyncDisposable
         catch (Exception ex)
         {
             DiagnosticLogger.Error(
-                "Unable to mark the durable FiveM event checkpoint as processed.",
+                "Unable to mark the durable game event checkpoint as processed.",
                 ex);
         }
     }
@@ -1026,7 +1033,7 @@ public sealed class CaptureCoordinator : IAsyncDisposable
                 }
 
                 DiagnosticLogger.Info(
-                    $"Recovered {recovered:N0} durable FiveM chat event line(s) from the interrupted capture journal.");
+                    $"Recovered {recovered:N0} durable game chat event line(s) from the interrupted capture journal.");
                 return;
             }
 
@@ -1137,7 +1144,7 @@ public sealed class CaptureCoordinator : IAsyncDisposable
         _currentServer = observedServer;
         NotifyServerChanged();
         DiagnosticLogger.Info(
-            "The resumed FiveM chat buffer had no overlap with its checkpoint; a genuine new session boundary was created.");
+            "The resumed game chat buffer had no overlap with its checkpoint; a genuine new session boundary was created.");
     }
 
     private static DateTime InferVisibleTimestamp(string line, DateTime observedAt)
@@ -1185,7 +1192,7 @@ public sealed class CaptureCoordinator : IAsyncDisposable
 
         _captureGapDetectedAt = DateTime.Now;
         DiagnosticLogger.Warn(
-            "FiveM chat UI reattached after live capture had begun. Afterline kept the new viewport as a baseline and did not import it, so no scrolled or late rows can be written out of order.");
+            "game chat UI reattached after live capture had begun. Afterline kept the new viewport as a baseline and did not import it, so no scrolled or late rows can be written out of order.");
     }
 
     private void SetState(CaptureState state)

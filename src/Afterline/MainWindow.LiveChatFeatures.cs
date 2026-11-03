@@ -239,7 +239,7 @@ public partial class MainWindow
             Content = "Parse current chat",
             Padding = new Thickness(10, 6, 10, 6),
             Margin = new Thickness(0, 0, 10, 6),
-            ToolTip = "Imports messages currently retained by FiveM's chat UI. Messages no longer retained by the game cannot be recovered."
+            ToolTip = "Imports messages currently retained by the game's chat UI. Messages no longer retained by the game cannot be recovered."
         };
         parseButton.Click += ParseCurrentChat_Click;
 
@@ -284,7 +284,7 @@ public partial class MainWindow
         _capture.ServerSessionChanged += Capture_ServerSessionChanged;
         _capture.ServerClockChanged += Capture_ServerClockChanged;
 
-        if (FiveMStateText.Parent is StackPanel panel)
+        if (GameStateText.Parent is StackPanel panel)
         {
             _serverStatusText = new TextBlock
             {
@@ -294,7 +294,7 @@ public partial class MainWindow
                 TextWrapping = TextWrapping.Wrap
             };
 
-            int index = panel.Children.IndexOf(FiveMStateText);
+            int index = panel.Children.IndexOf(GameStateText);
             panel.Children.Insert(Math.Min(index + 1, panel.Children.Count), _serverStatusText);
 
             _serverClockStatusText = new TextBlock
@@ -419,10 +419,10 @@ public partial class MainWindow
     {
         if (actionButton is not null) actionButton.IsEnabled = false;
         if (reportToLiveChat && _liveActionStatus is not null)
-            _liveActionStatus.Text = "Refreshing the active FiveM chat…";
+            _liveActionStatus.Text = "Refreshing the active game chat…";
         else if (_serverStatusText is not null)
         {
-            _serverStatusText.Text = "Checking the active FiveM connection…";
+            _serverStatusText.Text = "Checking the active game connection…";
             _serverStatusText.Foreground = (System.Windows.Media.Brush)FindResource("MutedText");
         }
 

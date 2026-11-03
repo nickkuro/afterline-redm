@@ -732,7 +732,7 @@ public partial class MainWindow
             _editorInput.Text = text;
             _editorInput.CaretIndex = 0;
             string colors = _editorExactChatColorsV068.Count > 0
-                ? $" · {_editorExactChatColorsV068.Count:N0} line(s) with exact FiveM colors"
+                ? $" · {_editorExactChatColorsV068.Count:N0} line(s) with exact game colors"
                 : string.Empty;
             SetEditorStatus($"Imported {Path.GetFileName(dialog.FileName)}{colors}.");
         }

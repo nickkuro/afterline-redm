@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Afterline.Models;
 using System.Windows.Media;
 
@@ -16,7 +17,8 @@ internal static class SessionRecoverySmokeTest
         DiagnosticLogger.RunPreviousSessionSnapshotSmokeTest(archiveRoot);
         CaptureReplayGuard.RunSmokeTest();
         CaptureCoordinator.RunFocusIndependentContinuitySmokeTest();
-        FiveMDevToolsChatReader.RunEventCaptureSmokeTest();
+        CfxDevToolsChatReader.RunEventCaptureSmokeTest();
+        VerifyCfxGameSupport();
         GlobalHotkeySafety.RunSmokeTest();
         CanaryBuildHistory.ValidatePackagedBuild();
         GameWindowCaptureService.RunFrameValidationSmokeTest();
@@ -491,6 +493,113 @@ internal static class SessionRecoverySmokeTest
         }
     }
 
+    // FiveM and RedM detection, screenshot windows, text RP OOC tags, and chat
+    // layout handling.
+    private static void VerifyCfxGameSupport()
+    {
+        var processes = new (string Name, CfxGame Expected)[]
+        {
+            ("FiveM", CfxGame.FiveM),
+            ("FiveM_b3095_GTAProcess", CfxGame.FiveM),
+            ("RedM", CfxGame.RedM),
+            ("RedM_GameProcess", CfxGame.RedM),
+            ("redm", CfxGame.RedM),
+            ("notepad", CfxGame.None),
+            ("", CfxGame.None)
+        };
+        foreach ((string name, CfxGame expected) in processes)
+        {
+            if (CfxGameProcessService.Classify(name) != expected)
+                throw new InvalidOperationException($"Process '{name}' was not classified as {expected}.");
+        }
+
+        var captureProcesses = new (string Name, CfxGame Expected)[]
+        {
+            ("FiveM_b3095_GTAProcess", CfxGame.FiveM),
+            ("GTA5", CfxGame.FiveM),
+            ("GTAVLauncher", CfxGame.FiveM),
+            ("RedM_GameProcess", CfxGame.RedM),
+            ("RDR2", CfxGame.RedM),
+            ("RDR2_Launcher", CfxGame.None),
+            ("explorer", CfxGame.None)
+        };
+        foreach ((string name, CfxGame expected) in captureProcesses)
+        {
+            if (GameWindowCaptureService.ClassifyCaptureProcess(name) != expected)
+                throw new InvalidOperationException($"Screenshot process '{name}' was not classified as {expected}.");
+        }
+
+        DateTime at = DateTime.Today;
+        string[] oocLines =
+        {
+            "[OOC] brb", "[LOOC] Jane: sorry, lag", "(OOC) back", "OOC: hi", "looc: quick question",
+            "(( back in five ))", "/b test"
+        };
+        foreach (string line in oocLines)
+        {
+            if (!new ChatEntry(at, line).IsOocLine)
+                throw new InvalidOperationException($"'{line}' was not treated as OOC.");
+        }
+
+        string[] icLines =
+        {
+            "Arthur Morgan says: Afternoon.", "* Arthur tips his hat.", "Oocelot says: howdy"
+        };
+        foreach (string line in icLines)
+        {
+            if (new ChatEntry(at, line).IsOocLine)
+                throw new InvalidOperationException($"'{line}' was wrongly treated as OOC.");
+        }
+
+        EditorChatLine formatted = EditorChatFormatter.FormatLines("[OOC] brb", false).Single();
+        if (formatted.Segments.Any(segment => segment.Color != EditorChatFormatter.Gray))
+            throw new InvalidOperationException("An [OOC] line was not coloured as OOC.");
+
+        IReadOnlyList<ChatLayout> automatic = CfxDevToolsChatReader.BuildLayouts("  ");
+        if (!automatic.SequenceEqual(CfxDevToolsChatReader.KnownLayouts) ||
+            automatic[0] != new ChatLayout(".chat__messages", ":scope > li"))
+            throw new InvalidOperationException("Automatic chat detection does not start with the existing FiveM layout.");
+
+        var customCases = new (string Input, ChatLayout Expected)[]
+        {
+            (".chat-list > .line", new ChatLayout(".chat-list", ":scope > .line")),
+            ("#ui .log>p", new ChatLayout("#ui .log", ":scope > p")),
+            ("div[data-x='a>b'] > li", new ChatLayout("div[data-x='a>b']", ":scope > li")),
+            (".chat-box", new ChatLayout(".chat-box", ":scope > *"))
+        };
+        foreach ((string input, ChatLayout expected) in customCases)
+        {
+            IReadOnlyList<ChatLayout> layouts = CfxDevToolsChatReader.BuildLayouts(input);
+            if (layouts.Count != automatic.Count + 1 || layouts[0] != expected)
+                throw new InvalidOperationException($"Custom chat selector '{input}' was not parsed as {expected}.");
+        }
+
+        IReadOnlyList<ChatLayout> withQuotes = CfxDevToolsChatReader.BuildLayouts("div[data-line='a\\\"b'] </script> > li");
+        string expression = CfxDevToolsChatReader.BuildReadExpression(withQuotes);
+        string observer = CfxDevToolsChatReader.BuildObserverExpression(withQuotes);
+        foreach (string script in new[] { expression, observer })
+        {
+            if (script.Contains("__AFTERLINE_CHAT_", StringComparison.Ordinal) ||
+                !script.Contains("function afterlineFindChat(layouts)", StringComparison.Ordinal) ||
+                !script.Contains(JsonSerializer.Serialize(withQuotes), StringComparison.Ordinal) ||
+                script.Contains("</script>", StringComparison.Ordinal))
+                throw new InvalidOperationException("A chat script did not embed its layouts safely.");
+        }
+
+        using JsonDocument frameTree = JsonDocument.Parse("""
+            {"frameTree":{"frame":{"id":"root","url":"nui://game/ui/root.html"},"childFrames":[
+              {"frame":{"id":"custom","url":"https://cfx-nui-western-chat/ui/index.html"}},
+              {"frame":{"id":"chat","url":"https://cfx-nui-chat/html/index.html"}},
+              {"frame":{"id":"other","url":"https://example.com/"}},
+              {"frame":{"id":"client","url":"https://cfx-nui-client/index.html"}}
+            ]}}
+            """);
+        IReadOnlyList<string> frames = CfxDevToolsChatReader.CollectNuiFrameIds(frameTree.RootElement);
+        if (!frames.SequenceEqual(new[] { "client", "chat", "custom" }))
+            throw new InvalidOperationException(
+                $"NUI chat frames were not ordered client, chat, custom: {string.Join(", ", frames)}.");
+    }
+
     private static void VerifyHtmlChatExport(ChatEntry exactColorEntry, DateTime exportedAt)
     {
         const string tattoo = "[05:58:23] [INFO] You have bought the My Crazy Life tattoo for $735.";
@@ -768,7 +877,7 @@ internal static class SessionRecoverySmokeTest
         var prematurelyFlat = new CapturedChatLine(
             text,
             new[] { new ChatColorRun(0, text.Length, 0xC2, 0xA3, 0xDA) });
-        if (!FiveMDevToolsChatReader.ContainsFlattenedLeadingAction(new[] { prematurelyFlat }))
+        if (!CfxDevToolsChatReader.ContainsFlattenedLeadingAction(new[] { prematurelyFlat }))
         {
             throw new InvalidOperationException(
                 "A prematurely flattened leading-star action row would bypass capture stabilization.");

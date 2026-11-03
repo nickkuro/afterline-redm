@@ -72,7 +72,8 @@ public static class ScreenshotGalleryIndexService
         foreach (string path in Directory.EnumerateFiles(folder, "*.png", SearchOption.TopDirectoryOnly))
         {
             var file = new FileInfo(path);
-            if (!file.Name.StartsWith("Afterline_FiveM_", StringComparison.OrdinalIgnoreCase))
+            if (!file.Name.StartsWith("Afterline_FiveM_", StringComparison.OrdinalIgnoreCase) &&
+                !file.Name.StartsWith("Afterline_RedM_", StringComparison.OrdinalIgnoreCase))
                 continue;
             newest.Enqueue(file, file.LastWriteTimeUtc.Ticks);
             if (newest.Count > maximum)

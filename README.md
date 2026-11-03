@@ -4,8 +4,10 @@ Afterline is an independent Windows utility for capturing, autosaving, archiving
 
 ## Features
 
-- Automatic chat capture while FiveM is active and connected to a server.
-- Best-effort server detection, including a friendly server name when FiveM exposes enough connection metadata to resolve one.
+- Automatic chat capture while FiveM or RedM is active and connected to a server.
+- Automatic chat layout detection, including the default Cfx chat, with an advanced custom selector for servers that ship their own chat UI.
+- Text RP out-of-character tags (`((`, `/b`, `[OOC]`, `(OOC)`, `OOC:` and the `LOOC` variants) are recognised by the OOC filter.
+- Best-effort server detection, including a friendly server name when the game exposes enough connection metadata to resolve one.
 - Server-aware chatlog boundaries: leaving or switching servers immediately finalizes the current server log.
 - One readable chatlog per server per calendar day, stored as `Chatlog [Server Name] [21-August-2026].txt`.
 - Automatic daily rollover after midnight without interrupting the active server session.
@@ -16,11 +18,11 @@ Afterline is an independent Windows utility for capturing, autosaving, archiving
 - Graceful shutdown finalization when the application is exited normally.
 - Custom chatlog storage directory with year and month organization.
 - Optional Live Chat display inside Afterline with timestamps, automatic RP colors, search and context tools.
-- Manual `Parse current chat` action for messages still retained by FiveM's current chat UI.
+- Manual `Parse current chat` action for messages still retained by the game's current chat UI.
 - One-click export of the current captured server session to the user's Downloads folder.
 - Archive browsing, pinned/recent logs and multi-term text search.
 - Plain-text chatlogs that remain usable outside Afterline.
-- Optional launch at Windows sign-in while capture remains idle until FiveM is running.
+- Optional launch at Windows sign-in while capture remains idle until FiveM or RedM is running.
 - RP Screenshot Editor with chat overlays, per-line color overrides, text effects, image tone controls and markup.
 - Static PNG/JPEG/BMP and animated GIF input in the Editor.
 - Animated GIF preview and export with the same chat, image adjustments, crop and markup applied to every frame.
@@ -60,12 +62,16 @@ Afterline stores chatlogs and application data locally. Chatlogs are ordinary te
 
 Update checks contact the public GitHub Releases API for this repository. No GitHub token is embedded in Afterline. An executable is downloaded only after the user explicitly chooses to install an available update.
 
-## FiveM interaction and server rules
+## FiveM and RedM interaction and server rules
 
-Afterline is designed as a passive, read-only companion utility. It reads chat that has already been rendered by the local FiveM NUI and uses normal server information endpoints to resolve friendly server names. It does not send NUI callbacks, trigger gameplay or server events, inject resources, automate gameplay, modify game memory, or bypass anti-cheat systems.
+Afterline is designed as a passive, read-only companion utility. It reads chat that has already been rendered by the game's local NUI (FiveM and RedM share the same CitizenFX NUI) and uses normal server information endpoints to resolve friendly server names. It does not send NUI callbacks, trigger gameplay or server events, inject resources, automate gameplay, modify game memory, or bypass anti-cheat systems.
+
+### Servers with a custom chat UI
+
+If Live Chat stays empty while you're connected, the server probably uses its own chat layout. Afterline checks the game's NUI frames for a known layout every few seconds. If none matches, set **Settings → Capture & processing → Custom chat selector** to the chat container and one line, written as `container > line` (for example `.chat-list > .line`). You can find them by opening `http://localhost:13172` in a browser while the game is running and inspecting the chat. The diagnostic log records which layout and frame are in use.
 
 Users are responsible for checking and following the rules of each server or community before using external chat-logging or archival tools.
 
 ## Independence
 
-Afterline is an independent third-party text roleplay chat parser and archive utility. It is not affiliated with, endorsed by, sponsored by, or approved by Rockstar Games, Cfx.re, FiveM, or any roleplay server or community. FiveM is referenced solely to describe compatibility.
+Afterline is an independent third-party text roleplay chat parser and archive utility. It is not affiliated with, endorsed by, sponsored by, or approved by Rockstar Games, Cfx.re, FiveM, RedM, or any roleplay server or community. FiveM and RedM are referenced solely to describe compatibility.

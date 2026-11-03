@@ -39,7 +39,7 @@ public partial class MainWindow
         });
         content.Children.Add(new TextBlock
         {
-            Text = "Keeps a pre-parse copy of FiveM's visible chat so recent lines can still be recovered after a crash, forced shutdown or interrupted write.",
+            Text = "Keeps a pre-parse copy of the game's visible chat so recent lines can still be recovered after a crash, forced shutdown or interrupted write.",
             Foreground = (Brush)FindResource("MutedText"),
             TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 5, 0, 10)

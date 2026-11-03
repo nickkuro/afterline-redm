@@ -131,7 +131,7 @@ internal sealed class PotentialDuplicateReviewWindow : Window
             IsEnabled = cleanupAvailable,
             ToolTip = cleanupAvailable
                 ? "Creates a backup, then asks once more before removing only the suspected replay shown on the right."
-                : "End the active FiveM session before changing its chatlog."
+                : "End the active game session before changing its chatlog."
         };
         remove.SetResourceReference(FrameworkElement.StyleProperty, "PrimaryButton");
         remove.Click += (_, _) => RequestRemoval(allCurrentLines: true);
@@ -143,7 +143,7 @@ internal sealed class PotentialDuplicateReviewWindow : Window
             IsEnabled = cleanupAvailable,
             ToolTip = cleanupAvailable
                 ? "Removes every currently confirmed replay only when each exact range occurs once. A complete backup is created first."
-                : "End the active FiveM session before changing its chatlog."
+                : "End the active game session before changing its chatlog."
         };
         resolveAll.Click += (_, _) => RequestResolveAll();
         actions.Children.Add(keep);
