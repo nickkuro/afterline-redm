@@ -1,0 +1,62 @@
+name: Publish RedM test pre-release
+
+# Manual only. Re-publishes an already-built, already-tested Windows build
+# artifact as a clearly marked TEST pre-release. Nothing is rebuilt.
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "ID of the passing 'Build and Publish Afterline Canary' run to publish"
+        required: true
+      tag:
+        description: "Release tag"
+        required: true
+        default: "redm-test-1"
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out release notes
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Download the tested build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.run_id }}
+        run: |
+          set -euo pipefail
+          conclusion=$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json conclusion,workflowName --jq '.workflowName + "|" + .conclusion')
+          if [ "$conclusion" != "Build and Publish Afterline Canary|success" ]; then
+            echo "Run $RUN_ID is not a passing Windows build ($conclusion)." >&2
+            exit 1
+          fi
+          gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --name Afterline-Canary-Windows-x64 --dir build
+
+      - name: Publish the TEST pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.run_id }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          sha=$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json headSha --jq .headSha)
+          short=${sha:0:7}
+          source_exe=$(ls build/*.exe | head -n 1)
+          exe="Afterline-RedM-TEST-ONLY-${short}-Windows-x64.exe"
+          mkdir -p out
+          cp "$source_exe" "out/$exe"
+          (cd out && sha256sum "$exe" > "$exe.sha256")
+          gh release create "$TAG" "out/$exe" "out/$exe.sha256" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$sha" \
+            --prerelease \
+            --latest=false \
+            --title "⚠️ TEST BUILD ONLY: Afterline with RedM support (unofficial, for testers only)" \
+            --notes-file .github/TEST_RELEASE_NOTES.md
